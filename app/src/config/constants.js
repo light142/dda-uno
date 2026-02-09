@@ -1,0 +1,1 @@
+export const SUITS = ['spade', 'diamond', 'heart', 'club'];
