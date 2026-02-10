@@ -1,4 +1,4 @@
-import { DECK_VISUAL } from '../config/settings.js';
+import { DECK_VISUAL, DECK_OFFSET } from '../config/settings.js';
 import { ASSET_DIMENSIONS } from '../config/assetDimensions.js';
 
 /**
@@ -28,7 +28,7 @@ export class VisualDeck extends Phaser.GameObjects.Container {
      * @returns {Object} {x, y} position for deck
      */
     static getDefaultPosition() {
-        return { x: 360, y: 640 };
+        return { x: DECK_OFFSET.X, y: DECK_OFFSET.Y };
     }
 
     /**

@@ -1,20 +1,20 @@
 export const SEAT_POSITIONS = [
-    { position: 'bottom', x: 360, y: 1100 },
-    { position: 'left', x: 100, y: 620 },
-    { position: 'top', x: 360, y: 180 },
-    { position: 'right', x: 620, y: 620 },
+    { position: 'bottom', x: 290, y: 600 },
+    { position: 'left', x: 100, y: 250 },
+    { position: 'top', x: 640, y: 80 },
+    { position: 'right', x: 1180, y: 250 },
 ];
 
 export const CARD_OFFSET_TO_CENTER = {
-    bottom: { x: 0, y: -158 },
-    left: { x: 120, y: 0 },
-    top: { x: 0, y: 130 },
-    right: { x: -120, y: 0 },
+    bottom: { x: 350, y: 0 },
+    left: { x: 220, y: 5 },
+    top: { x: 220, y: 5 },
+    right: { x: -220, y: 5 },
 };
 
 export const CARD_SPACING = {
-    LOCAL_PLAYER: 70,
-    OTHER_PLAYERS: 30
+    LOCAL_PLAYER: 66,
+    OTHER_PLAYERS: 37
 };
 
 export const LOCAL_PLAYER_HAND = {
@@ -23,14 +23,14 @@ export const LOCAL_PLAYER_HAND = {
 };
 
 export const DECK_OFFSET = {
-    HORIZONTAL: 120,
-    VERTICAL: 124
+    X: 350,
+    Y: 450
 };
 
 // Scale multipliers for card animations (relative to display size)
 export const CARD_SCALE = {
-    INITIAL: 1.0,
-    HIGHLIGHT: 1.15,
+    INITIAL: 0.9,
+    HIGHLIGHT: 1,
     PLAYER_INITIAL: 1.0,
     PLAYER_HIGHLIGHT: 1.1,
 };
@@ -45,26 +45,26 @@ export const ANIMATION = {
 export const DECK_VISUAL = {
     ROTATION: 0,
     STACK_LAYERS: 6,
-    LAYER_OFFSET_X: 0.4,
-    LAYER_OFFSET_Y: 1.6,
+    LAYER_OFFSET_X: -0.5,
+    LAYER_OFFSET_Y: 2.8,
     CARD_POP_DURATION: 150,
     CARD_POP_LIFT: 8
 };
 
 export const AVATAR_NICKNAME_DISPLAY = {
     LOCAL_PLAYER: {
-        WIDTH: 140,
-        HEIGHT: 28,
+        WIDTH: 130,
+        HEIGHT: 30,
         CORNER_RADIUS: 12,
         FONT_SIZE: 16,
-        OFFSET_Y: 94
+        OFFSET_Y: 88
     },
     OTHER_PLAYERS: {
-        WIDTH: 140,
-        HEIGHT: 28,
+        WIDTH: 100,
+        HEIGHT: 26,
         CORNER_RADIUS: 12,
-        FONT_SIZE: 16,
-        OFFSET_Y: 94
+        FONT_SIZE: 14,
+        OFFSET_Y: 73
     },
     COLORS: {
         BG: 0x1a0a0a,
@@ -83,25 +83,25 @@ export const AVATAR_NICKNAME_DISPLAY = {
 // baseRotation: tilt of cards (positive = CW, negative = CCW)
 export const OTHER_PLAYER_FAN = {
     left: {
-        spreadAngle: 5,         // almost horizontal to the right (toward center)
-        spacing: 12,            // tight overlap between card centers
-        arcAmount: 5,           // subtle downward arc bow at center
-        baseRotation: 30,       // CW — card tops point upper-right, like reference
-        fanAngle: 12,           // rotation spread: 24° to 36° across the fan
+        spreadAngle: 0,         // almost horizontal to the right (toward center)
+        spacing: 37,            // tight overlap between card centers
+        arcAmount: 0,           // subtle downward arc bow at center
+        baseRotation: 0,       // CW — card tops point upper-right, like reference
+        fanAngle: 0,           // rotation spread: 24° to 36° across the fan
     },
     top: {
-        spreadAngle: 0,         // horizontal
-        spacing: 14,
-        arcAmount: 5,
-        baseRotation: 0,
-        fanAngle: 14,
+        spreadAngle: 0,         // almost horizontal to the right (toward center)
+        spacing: 37,            // tight overlap between card centers
+        arcAmount: 0,           // subtle downward arc bow at center
+        baseRotation: 0,       // CW — card tops point upper-right, like reference
+        fanAngle: 0,           // rotation spread: 24° to 36° across the fan
     },
     right: {
-        spreadAngle: 175,       // almost horizontal to the left (toward center)
-        spacing: 12,
-        arcAmount: -5,          // negative for downward arc on right side
-        baseRotation: -30,      // CCW — card tops point upper-left, like reference
-        fanAngle: -12,
+        spreadAngle: 0,         // almost horizontal to the right (toward center)
+        spacing: 37,            // tight overlap between card centers
+        arcAmount: 0,           // subtle downward arc bow at center
+        baseRotation: 0,       // CW — card tops point upper-right, like reference
+        fanAngle: 0,           // rotation spread: 24° to 36° across the fan
     }
 };
 

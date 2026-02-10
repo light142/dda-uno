@@ -5,8 +5,8 @@ const config = {
     title: 'UNO Card Game',
     description: '',
     parent: 'game-container',
-    width: 720,
-    height: 1280,
+    width: 1280,
+    height: 720,
     backgroundColor: '#000000',
     pixelArt: false,
     scene: [

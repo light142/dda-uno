@@ -111,9 +111,17 @@ export class PlayerManager {
             return;
         }
 
+        const avatarPool = [
+            'avatar_1', 'avatar_5',
+            'avatar_2', 'avatar_6',
+            'avatar_3', 'avatar_7',
+            'avatar_4', 'avatar_8'
+        ];
+        const shuffledPool = [...avatarPool].sort(() => Math.random() - 0.5);
+
         this.players.forEach((player, index) => {
             const avatar = new PlayerAvatar(this.scene, player);
-            avatar.setAvatarImage(`avatar_${index + 1}`);
+            avatar.setAvatarImage(shuffledPool[index]);
             this.playerAvatars.push(avatar);
         });
     }

@@ -4,8 +4,6 @@ export function loadAssets(scene) {
 
     scene.load.image('background', 'assets/images/background/bg.png');
 
-    scene.load.spritesheet('emote_phoenix', 'assets/images/emotes/phoenix-emote.png', { frameWidth: 180, frameHeight: 180 });
-
     scene.load.image('player_frame_left', 'assets/images/frames/f1.png', { frameWidth: 180, frameHeight: 180 });
     scene.load.image('player_frame_top', 'assets/images/frames/f2.png', { frameWidth: 180, frameHeight: 180 });
     scene.load.image('player_frame_bottom', 'assets/images/frames/f3.png', { frameWidth: 180, frameHeight: 180 });
@@ -17,9 +15,13 @@ export function loadAssets(scene) {
     scene.load.image('card_back_player', cardBackPath);
 
     scene.load.image('avatar_1', `assets/images/avatars/mini_p1.jpg`);
-    scene.load.image('avatar_2', `assets/images/avatars/p2.png`);
+    scene.load.image('avatar_2', `assets/images/avatars/mini_p2.jpg`);
     scene.load.image('avatar_3', `assets/images/avatars/mini_p3.jpg`);
     scene.load.image('avatar_4', `assets/images/avatars/mini_p4.jpg`);
+    scene.load.image('avatar_5', `assets/images/avatars/mini_p5.jpg`);
+    scene.load.image('avatar_6', `assets/images/avatars/mini_p6.jpg`);
+    scene.load.image('avatar_7', `assets/images/avatars/mini_p7.jpg`);
+    scene.load.image('avatar_8', `assets/images/avatars/mini_p8.jpg`);
 
     scene.load.audio('place_card_sound', 'assets/audio/place-card.m4a');
 
@@ -49,27 +51,5 @@ export function loadAssets(scene) {
         const basePath = `assets/images/cards/special/${fileCode}.png`;
         scene.load.image(card, basePath);
         scene.load.image(`${card}_player`, basePath);
-    });
-}
-
-// Emote animation configs
-const EMOTE_ANIMS = [
-    { key: 'phoenix', frames: 36, frameRate: 8, repeat: 0 },
-];
-
-/**
- * Create emote animations - call this in scene's create() method
- */
-export function createEmoteAnimations(scene) {
-    EMOTE_ANIMS.forEach(({ key, frames, frameRate, repeat }) => {
-        const animKey = `emote_${key}_anim`;
-        if (!scene.anims.exists(animKey)) {
-            scene.anims.create({
-                key: animKey,
-                frames: scene.anims.generateFrameNumbers(`emote_${key}`, { start: 0, end: frames - 1 }),
-                frameRate,
-                repeat
-            });
-        }
     });
 }

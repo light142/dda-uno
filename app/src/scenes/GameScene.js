@@ -1,9 +1,8 @@
-import { loadAssets, createEmoteAnimations } from '../utils/assetLoader.js';
+import { loadAssets } from '../utils/assetLoader.js';
 import { PlayerManager } from '../systems/PlayerManager.js';
 import { CardDealer } from '../systems/CardDealer.js';
 import { Deck } from '../systems/Deck.js';
 import { VisualDeck } from '../entities/VisualDeck.js';
-import { EmoteSystem } from '../systems/EmoteSystem.js';
 import { ASSET_DIMENSIONS } from '../config/assetDimensions.js';
 
 export class GameScene extends Phaser.Scene {
@@ -39,14 +38,13 @@ export class GameScene extends Phaser.Scene {
     }
 
     create() {
-        createEmoteAnimations(this);
         this.setupBackground();
         this.setupSystems();
         this.startDeal();
     }
 
     setupBackground() {
-        this.background = this.add.image(360, 640, 'background');
+        this.background = this.add.image(ASSET_DIMENSIONS.BACKGROUND.WIDTH / 2, ASSET_DIMENSIONS.BACKGROUND.HEIGHT / 2, 'background');
         this.background.setDisplaySize(ASSET_DIMENSIONS.BACKGROUND.WIDTH, ASSET_DIMENSIONS.BACKGROUND.HEIGHT);
     }
 
@@ -64,17 +62,12 @@ export class GameScene extends Phaser.Scene {
         // Create card dealer
         this.dealer = new CardDealer(this, deckPosition.x, deckPosition.y, this.visualDeck);
 
-        // Create EmoteSystem for avatar emotes
-        this.emoteSystem = new EmoteSystem(this, this.playerManager);
-
         // Setup UI via managers
         this.playerManager.createPlayerAvatars();
         this.playerManager.createPlayerLabels();
     }
 
     startDeal() {
-
-        this.emoteSystem.playEmote(1, 'phoenix');
         // Cancel any pending timers from previous round
         this.cancelPendingTimers();
 

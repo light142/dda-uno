@@ -34,6 +34,7 @@ export class Card extends Phaser.GameObjects.Image {
 
         this.setDepth(2);
 
+
         // Set initial display size (deck size) - fixed regardless of texture resolution
         this.setDisplaySize(this.baseDisplayWidth, this.baseDisplayHeight);
 
