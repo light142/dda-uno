@@ -2,7 +2,7 @@ import { GameScene } from './scenes/GameScene.js';
 
 const config = {
     type: Phaser.AUTO,
-    title: 'Shan Koe Mee',
+    title: 'UNO Card Game',
     description: '',
     parent: 'game-container',
     width: 720,

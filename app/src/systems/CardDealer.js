@@ -1,5 +1,5 @@
 import { Card } from '../entities/Card.js';
-import { ANIMATION, CARD_OFFSET_TO_CENTER, CARD_SPACING, LOCAL_PLAYER_HAND } from '../config/settings.js';
+import { ANIMATION, CARD_OFFSET_TO_CENTER, CARD_SPACING, LOCAL_PLAYER_HAND, OTHER_PLAYER_FAN } from '../config/settings.js';
 
 /**
  * CardDealer - handles dealing cards with animations
@@ -42,34 +42,14 @@ export class CardDealer {
         });
     }
 
-    /**
-     * Get players in counterclockwise order starting from player after banker
-     * @param {Array} players - All players
-     * @param {number} bankerIndex - Index of the banker/dealer
-     * @returns {Array} Players ordered counterclockwise, starting after banker
-     */
-    getCounterclockwiseOrder(players, bankerIndex) {
-        const ordered = [];
-        const count = players.length;
-        // Counterclockwise means going backwards through indices (to the right)
-        // Start from player to the right of banker (bankerIndex - 1, wrapping)
-        for (let i = 1; i <= count; i++) {
-            const idx = (bankerIndex - i + count) % count;
-            ordered.push(players[idx]);
-        }
-        return ordered;
-    }
-
-    dealToMultiplePlayers(players, cardsPerPlayer, deck, onComplete, bankerIndex = 0) {
-        // Get players in counterclockwise order starting after banker
-        const orderedPlayers = this.getCounterclockwiseOrder(players, bankerIndex);
-        const totalCards = cardsPerPlayer * orderedPlayers.length;
+    dealToMultiplePlayers(players, cardsPerPlayer, deck, onComplete) {
+        const totalCards = cardsPerPlayer * players.length;
         let dealtCount = 0;
 
-        // Deal round-robin in counterclockwise order
+        // Deal round-robin
         for (let round = 0; round < cardsPerPlayer; round++) {
-            orderedPlayers.forEach((player, playerIndex) => {
-                const cardIndex = round * orderedPlayers.length + playerIndex;
+            players.forEach((player, playerIndex) => {
+                const cardIndex = round * players.length + playerIndex;
                 const cardData = deck.draw();
                 const positions = this.calculatePositions(player, cardsPerPlayer, CARD_SPACING.OTHER_PLAYERS, CARD_SPACING.LOCAL_PLAYER);
 
@@ -86,15 +66,13 @@ export class CardDealer {
     }
 
     /**
-     * Deal extra cards to players with 50% chance each, in counterclockwise order
+     * Deal extra cards to players with 50% chance each
      * @param {Array} players - All players
-     * @param {number} bankerIndex - Index of the banker/dealer
      * @param {Deck} deck - The deck to draw from
      * @param {Function} onComplete - Callback when done
      */
-    dealExtraCards(players, bankerIndex, deck, onComplete) {
-        const orderedPlayers = this.getCounterclockwiseOrder(players, bankerIndex);
-        const playersGettingExtra = orderedPlayers.filter(() => Math.random() < 0.5);
+    dealExtraCards(players, deck, onComplete) {
+        const playersGettingExtra = players.filter(() => Math.random() < 0.5);
 
         if (playersGettingExtra.length === 0) {
             if (onComplete) onComplete();
@@ -167,7 +145,7 @@ export class CardDealer {
         const centerY = player.y + offset.y;
         const spacing = player.isLocal ? localPlayerSpacing : defaultSpacing;
 
-        // Simple horizontal layout for dealing
+        // Horizontal layout for dealing
         const totalWidth = (cardCount - 1) * spacing;
         const startX = centerX - totalWidth / 2;
 
@@ -232,6 +210,69 @@ export class CardDealer {
                 if (completed === cards.length && onComplete) {
                     onComplete();
                 }
+            });
+        });
+    }
+
+    /**
+     * Calculate fan positions for other players' cards (3D-style arrangement)
+     */
+    calculateOtherPlayerFanPositions(player) {
+        const config = OTHER_PLAYER_FAN[player.position];
+        if (!config) return null;
+
+        const cardCount = player.cards.length;
+        const offset = CARD_OFFSET_TO_CENTER[player.position] || { x: 0, y: 0 };
+        const centerX = player.x + offset.x;
+        const centerY = player.y + offset.y;
+        const totalSpread = (cardCount - 1) * config.spacing;
+
+        // Spread direction vector
+        const spreadRad = Phaser.Math.DegToRad(config.spreadAngle);
+        const dirX = Math.cos(spreadRad);
+        const dirY = Math.sin(spreadRad);
+        // Perpendicular for arc curvature
+        const perpX = -dirY;
+        const perpY = dirX;
+
+        const positions = [];
+
+        for (let i = 0; i < cardCount; i++) {
+            const t = cardCount > 1 ? (i / (cardCount - 1)) - 0.5 : 0;
+            const spread = t * totalSpread;
+            const arc = Math.cos(t * Math.PI) * config.arcAmount;
+
+            const x = centerX + spread * dirX + arc * perpX;
+            const y = centerY + spread * dirY + arc * perpY;
+
+            const rotation = Phaser.Math.DegToRad(config.baseRotation + t * config.fanAngle);
+            positions.push({ x, y, rotation });
+        }
+
+        return positions;
+    }
+
+    /**
+     * Animate other players' cards into a 3D-style fan layout
+     */
+    fanOutOtherPlayerCards(player, callback) {
+        const fanPositions = this.calculateOtherPlayerFanPositions(player);
+        if (!fanPositions) {
+            if (callback) callback();
+            return;
+        }
+
+        const cards = player.cards;
+        let completed = 0;
+
+        cards.forEach((card, index) => {
+            card.setDepth(3 + index);
+            const pos = fanPositions[index];
+            const delay = index * 60;
+
+            card.animateToFanPosition(pos.x, pos.y, pos.rotation, delay, () => {
+                completed++;
+                if (completed === cards.length && callback) callback();
             });
         });
     }

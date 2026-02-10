@@ -1,4 +1,4 @@
-import { DECK_VISUAL, DECK_OFFSET } from '../config/settings.js';
+import { DECK_VISUAL } from '../config/settings.js';
 import { ASSET_DIMENSIONS } from '../config/assetDimensions.js';
 
 /**
@@ -24,37 +24,11 @@ export class VisualDeck extends Phaser.GameObjects.Container {
     }
 
     /**
-     * Calculate deck position relative to banker
-     * Static method that can be called before instantiation
-     * @param {Player} banker - The banker player
+     * Get the default center deck position
      * @returns {Object} {x, y} position for deck
      */
-    static calculatePositionForBanker(banker) {
-        switch (banker.position) {
-            case 'bottom':
-                // Deck on the left side of bottom player
-                return { x: banker.x - DECK_OFFSET.HORIZONTAL, y: banker.y };
-
-            case 'left_bottom':
-            case 'left_center':
-            case 'left_top':
-                // Deck below left side players
-                return { x: banker.x, y: banker.y + DECK_OFFSET.VERTICAL };
-
-            case 'top':
-                // Deck on the right side of top player
-                return { x: banker.x + DECK_OFFSET.HORIZONTAL, y: banker.y };
-
-            case 'right_top':
-            case 'right_center':
-            case 'right_bottom':
-                // Deck below right side players
-                return { x: banker.x, y: banker.y + DECK_OFFSET.VERTICAL };
-
-            default:
-                // Fallback to center
-                return { x: 360, y: 640 };
-        }
+    static getDefaultPosition() {
+        return { x: 360, y: 640 };
     }
 
     /**

@@ -1,7 +1,7 @@
-import { SUITS } from '../config/constants.js';
+import { COLORS, COLOR_CARD_VALUES, WILD_CARDS } from '../config/constants.js';
 
 /**
- * Deck system - manages a deck of cards
+ * Deck system - manages a UNO deck of cards
  */
 export class Deck {
     constructor() {
@@ -10,13 +10,25 @@ export class Deck {
 
     create() {
         this.cards = [];
-        
-        SUITS.forEach(suit => {
-            for (let value = 1; value <= 13; value++) {
-                this.cards.push({ suit, value });
-            }
+
+        COLORS.forEach(color => {
+            // One 0 card per color
+            this.cards.push({ suit: color, value: '0' });
+            // Two of each 1-9 and action cards per color
+            COLOR_CARD_VALUES.forEach(value => {
+                if (value === '0') return;
+                this.cards.push({ suit: color, value });
+                this.cards.push({ suit: color, value });
+            });
         });
-        
+
+        // 4 wild cards and 4 wild draw-four cards
+        for (let i = 0; i < 4; i++) {
+            WILD_CARDS.forEach(card => {
+                this.cards.push({ suit: null, value: card });
+            });
+        }
+
         return this.cards;
     }
 

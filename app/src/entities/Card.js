@@ -16,7 +16,9 @@ export class Card extends Phaser.GameObjects.Image {
 
         // Texture keys based on player type
         this.cardBackKey = isPlayer ? 'card_back_player' : 'card_back';
-        this.cardFaceKey = isPlayer ? `${value}_${suit}_player` : `${value}_${suit}`;
+        // Wild cards have no suit — their value IS the texture key (e.g. 'wild')
+        const faceKey = suit ? `${value}_${suit}` : value;
+        this.cardFaceKey = isPlayer ? `${faceKey}_player` : faceKey;
 
         this.isFaceUp = false;
         this.isSelected = false;
@@ -288,6 +290,25 @@ export class Card extends Phaser.GameObjects.Image {
     }
 
     /**
+     * Add a drop shadow effect for depth perception (WebGL only)
+     */
+    addDropShadow(x = 1, y = 2, decay = 0.06, power = 0.8, color = 0x000000, samples = 6, intensity = 0.8) {
+        if (this.preFX && !this.shadowFX) {
+            this.shadowFX = this.preFX.addShadow(x, y, decay, power, color, samples, intensity);
+        }
+    }
+
+    /**
+     * Remove the drop shadow effect
+     */
+    removeDropShadow() {
+        if (this.shadowFX && this.preFX) {
+            this.preFX.remove(this.shadowFX);
+            this.shadowFX = null;
+        }
+    }
+
+    /**
      * Get card info
      */
     getInfo() {
@@ -319,6 +340,7 @@ export class Card extends Phaser.GameObjects.Image {
      */
     destroy() {
         this.scene.tweens.killTweensOf(this);
+        this.removeDropShadow();
         this.removeAllListeners();
         super.destroy();
     }
