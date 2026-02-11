@@ -1,4 +1,4 @@
-import { ANIMATION, CARD_SCALE } from '../config/settings.js';
+import { ANIMATION, CARD_SCALE, DRAG_DROP } from '../config/settings.js';
 import { ASSET_DIMENSIONS } from '../config/assetDimensions.js';
 /**
  * Card entity class
@@ -22,7 +22,9 @@ export class Card extends Phaser.GameObjects.Image {
 
         this.isFaceUp = false;
         this.isSelected = false;
+        this.originalX = x;
         this.originalY = y;
+        this.isDragging = false;
 
         // Store base display dimensions (deck size when spawned)
         const deckDims = ASSET_DIMENSIONS.CARD_DECK;
@@ -210,6 +212,7 @@ export class Card extends Phaser.GameObjects.Image {
                     duration: 300,
                     ease: 'Back.easeOut',
                     onComplete: () => {
+                        this.originalX = x;
                         this.originalY = y;
                         this.originalRotation = rotation;
                         if (callback) callback();
@@ -240,18 +243,80 @@ export class Card extends Phaser.GameObjects.Image {
     }
 
     /**
-     * Make card interactive
+     * Make card interactive with drag support
      */
     makeInteractive() {
-        this.setInteractive();
-        
-        // Hover effects
+        this.setInteractive({ draggable: true });
+
         this.on('pointerover', () => {
-            this.toggleSelect();
+            if (!this.isDragging) {
+                this.toggleSelect();
+            }
         });
-        
+
         this.on('pointerout', () => {
-            this.toggleSelect();
+            if (!this.isDragging && this.isSelected) {
+                this.toggleSelect();
+            }
+        });
+    }
+
+    startDrag() {
+        this.isDragging = true;
+        if (this.isSelected) {
+            this.isSelected = false;
+        }
+        this.scene.tweens.killTweensOf(this);
+        this.setDepth(DRAG_DROP.DRAG_DEPTH);
+        this.setAlpha(DRAG_DROP.DRAG_ALPHA);
+        this.rotation = 0;
+    }
+
+    updateDrag(dragX, dragY) {
+        this.x = dragX;
+        this.y = dragY;
+    }
+
+    snapBack(callback) {
+        this.isDragging = false;
+        this.scene.tweens.add({
+            targets: this,
+            x: this.originalX,
+            y: this.originalY,
+            rotation: this.originalRotation || 0,
+            alpha: 1,
+            duration: DRAG_DROP.SNAP_DURATION,
+            ease: 'Back.easeOut',
+            onComplete: () => {
+                this.setDepth(2);
+                if (callback) callback();
+            }
+        });
+    }
+
+    playToCenter(targetX, targetY, rotation, callback) {
+        this.isDragging = false;
+        this.scene.tweens.killTweensOf(this);
+        this.removeInteractive();
+        this.removeAllListeners();
+
+        const dims = ASSET_DIMENSIONS.CARD;
+        this.scene.tweens.add({
+            targets: this,
+            x: targetX,
+            y: targetY,
+            displayWidth: dims.WIDTH,
+            displayHeight: dims.HEIGHT,
+            rotation: rotation,
+            alpha: 1,
+            duration: DRAG_DROP.PLAY_DURATION,
+            ease: 'Power2',
+            onComplete: () => {
+                this.baseScaleX = this.scaleX;
+                this.baseScaleY = this.scaleY;
+                this.setDepth(2);
+                if (callback) callback();
+            }
         });
     }
 

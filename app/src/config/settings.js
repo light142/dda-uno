@@ -155,7 +155,7 @@ export const DIRECTION_ARROW = {
 
 export const PASS_BUTTON = {
     X: 1080,
-    Y: 640,
+    Y: 630,
     DEPTH: 10,
     PRESS: {
         DURATION: 20,
@@ -199,6 +199,40 @@ export const UNO_BUTTON = {
     RAISE: 4,
     SHADOW_ALPHA: 0.8,
     HIT_PADDING: 15,
+};
+
+export const DRAG_DROP = {
+    PLAY_ZONE: { X: 640, Y: 335, RADIUS: 150 },
+    PLAY_ZONE_VISUAL: {
+        DEPTH: 1,
+        RING_COLOR: 0xFFD700,
+        RING_ALPHA: 0.35,
+        RING_WIDTH: 3,
+        FILL_COLOR: 0xFFD700,
+        FILL_ALPHA: 0.06,
+        HOVER_RING_ALPHA: 0.8,
+        HOVER_FILL_ALPHA: 0.15,
+        FADE_IN: 200,
+        FADE_OUT: 150,
+        PULSE_MIN: 0.92,
+        PULSE_MAX: 1.0,
+        PULSE_DURATION: 900,
+    },
+    PLAY_SCATTER: {
+        OFFSET: 20,
+        ROTATION: 0.35,
+    },
+    DRAG_ALPHA: 0.85,
+    DRAG_DEPTH: 100,
+    SNAP_DURATION: 200,
+    PLAY_DURATION: 300,
+    DRAG_THRESHOLD: 10,
+};
+
+export const BOT_TURN = {
+    THINK_DELAY: 100,
+    BETWEEN_BOTS: 600,
+    FLIP_TO_PLAY_DELAY: 300,
 };
 
 export const EMOTE_DISPLAY = {
