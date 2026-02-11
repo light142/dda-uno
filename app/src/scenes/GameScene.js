@@ -121,9 +121,7 @@ export class GameScene extends Phaser.Scene {
             this.dealer.fanOutLocalPlayerCards(localPlayer, () => {
                 // Make cards interactive after fan animation
                 localPlayer.cards.forEach(card => {
-                    card.makeInteractive((clickedCard) => {
-                        clickedCard.toggleSelect();
-                    });
+                    card.makeInteractive();
                 });
                 this.passButton.enable();
             });

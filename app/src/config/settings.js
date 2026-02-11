@@ -177,7 +177,7 @@ export const PASS_BUTTON = {
 
 export const UNO_BUTTON = {
     X: 930,
-    Y: 455,
+    Y: 440,
     DEPTH: 10,
     ALPHA: {
         ACTIVE: 1,

@@ -225,7 +225,7 @@ export class Card extends Phaser.GameObjects.Image {
     toggleSelect() {
         this.isSelected = !this.isSelected;
 
-        const targetY = this.isSelected ? this.originalY - 50 : this.originalY;
+        const targetY = this.isSelected ? this.originalY - 40 : this.originalY;
         const targetRotation = this.isSelected ? 0 : (this.originalRotation || 0);
 
         this.scene.tweens.add({
@@ -240,53 +240,18 @@ export class Card extends Phaser.GameObjects.Image {
     }
 
     /**
-     * Highlight card
-     */
-    highlight() {
-        const scale = this.isPlayer ? CARD_SCALE.PLAYER_HIGHLIGHT : CARD_SCALE.HIGHLIGHT;
-        this.scene.tweens.add({
-            targets: this,
-            scaleX: this.baseScaleX * scale,
-            scaleY: this.baseScaleY * scale,
-            duration: 200,
-            ease: 'Power2'
-        });
-    }
-
-    /**
-     * Remove highlight
-     */
-    unhighlight() {
-        const scale = this.isPlayer ? CARD_SCALE.PLAYER_INITIAL : CARD_SCALE.INITIAL;
-        this.scene.tweens.add({
-            targets: this,
-            scaleX: this.baseScaleX * scale,
-            scaleY: this.baseScaleY * scale,
-            duration: 200,
-            ease: 'Power2'
-        });
-    }
-
-    /**
      * Make card interactive
      */
-    makeInteractive(callback) {
+    makeInteractive() {
         this.setInteractive();
-        this.on('pointerdown', () => {
-            if (callback) callback(this);
-        });
         
         // Hover effects
         this.on('pointerover', () => {
-            if (!this.isSelected) {
-                this.highlight();
-            }
+            this.toggleSelect();
         });
         
         this.on('pointerout', () => {
-            if (!this.isSelected) {
-                this.unhighlight();
-            }
+            this.toggleSelect();
         });
     }
 
