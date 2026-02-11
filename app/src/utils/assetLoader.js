@@ -4,6 +4,13 @@ export function loadAssets(scene) {
 
     scene.load.image('background', 'assets/images/background/bg.png');
 
+    scene.load.image('arrow', 'assets/images/arrows/arrow.png');
+    scene.load.image('r_arrow', 'assets/images/arrows/r-arrow.png');
+
+    scene.load.image('pass_btn', 'assets/images/buttons/pass.png');
+    scene.load.image('pass_disabled_btn', 'assets/images/buttons/pass-disabled.png');
+    scene.load.image('uno_btn', 'assets/images/buttons/uno.png');
+
     scene.load.image('player_frame_left', 'assets/images/frames/f1.png', { frameWidth: 180, frameHeight: 180 });
     scene.load.image('player_frame_top', 'assets/images/frames/f2.png', { frameWidth: 180, frameHeight: 180 });
     scene.load.image('player_frame_bottom', 'assets/images/frames/f3.png', { frameWidth: 180, frameHeight: 180 });

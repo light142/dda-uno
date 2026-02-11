@@ -14,9 +14,14 @@ const config = {
     ],
     scale: {
         mode: Phaser.Scale.FIT,
-        autoCenter: Phaser.Scale.CENTER_BOTH
+        autoCenter: Phaser.Scale.CENTER_BOTH,
     },
 }
 
-new Phaser.Game(config);
+const game = new Phaser.Game(config);
+
+// Force landscape orientation on supported devices
+if (screen.orientation && screen.orientation.lock) {
+    screen.orientation.lock('landscape').catch(() => {});
+}
             

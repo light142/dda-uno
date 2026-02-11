@@ -4,6 +4,9 @@ import { CardDealer } from '../systems/CardDealer.js';
 import { Deck } from '../systems/Deck.js';
 import { VisualDeck } from '../entities/VisualDeck.js';
 import { ASSET_DIMENSIONS } from '../config/assetDimensions.js';
+import { DirectionArrow } from '../entities/DirectionArrow.js';
+import { PassButton } from '../entities/PassButton.js';
+import { UnoButton } from '../entities/UnoButton.js';
 
 export class GameScene extends Phaser.Scene {
     constructor() {
@@ -62,6 +65,10 @@ export class GameScene extends Phaser.Scene {
         // Create card dealer
         this.dealer = new CardDealer(this, deckPosition.x, deckPosition.y, this.visualDeck);
 
+        this.directionArrow = new DirectionArrow(this);
+        this.passButton = new PassButton(this);
+        this.unoButton = new UnoButton(this);
+
         // Setup UI via managers
         this.playerManager.createPlayerAvatars();
         this.playerManager.createPlayerLabels();
@@ -71,6 +78,8 @@ export class GameScene extends Phaser.Scene {
         // Cancel any pending timers from previous round
         this.cancelPendingTimers();
 
+        this.directionArrow.toggle();
+
         this.deck.reset();
 
         // Sync dealer position with visual deck before dealing
@@ -79,11 +88,14 @@ export class GameScene extends Phaser.Scene {
         // Reset visual deck
         this.visualDeck.reset();
 
-        const players = this.playerManager.getAllPlayers();
+        // Shuffle animation, then deal
+        this.visualDeck.shuffle(() => {
+            const players = this.playerManager.getAllPlayers();
 
-        // Deal 7 cards to each player
-        this.dealer.dealToMultiplePlayers(players, 7, this.deck, () => {
-            this.onDealComplete();
+            // Deal 7 cards to each player
+            this.dealer.dealToMultiplePlayers(players, 7, this.deck, () => {
+                this.onDealComplete();
+            });
         });
     }
 
@@ -113,6 +125,7 @@ export class GameScene extends Phaser.Scene {
                         clickedCard.toggleSelect();
                     });
                 });
+                this.passButton.enable();
             });
         });
 

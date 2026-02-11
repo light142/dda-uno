@@ -1,10 +1,15 @@
+const dim = (width, [rw, rh]) => ({ WIDTH: width, HEIGHT: width * (rh / rw) });
+
 export const ASSET_DIMENSIONS = {
     BACKGROUND: { WIDTH: 1280, HEIGHT: 720 },
-    CARD: { WIDTH: 65, HEIGHT: 101 }, // 100 : 156 ratio
-    CARD_PLAYER: { WIDTH: 120, HEIGHT: 187 }, // 100 : 156 ratio
-    CARD_DECK: { WIDTH: 70, HEIGHT: 109 }, // 100 : 156 ratio
-    FRAME: { WIDTH: 120, HEIGHT: 120 },
-    FRAME_LOCAL: { WIDTH: 150, HEIGHT: 150 },
-    AVATAR: { WIDTH: 74, HEIGHT: 74 },
-    AVATAR_LOCAL: { WIDTH: 88, HEIGHT: 88 },
+    CARD: dim(65, [100, 156]),
+    CARD_PLAYER: dim(120, [100, 156]),
+    CARD_DECK: dim(70, [100, 156]),
+    FRAME: dim(120, [1, 1]),
+    FRAME_LOCAL: dim(150, [1, 1]),
+    AVATAR: dim(74, [1, 1]),
+    AVATAR_LOCAL: dim(88, [1, 1]),
+    ARROW: dim(280, [1, 1]),
+    PASS_BUTTON: dim(220, [400, 140]),
+    UNO_BUTTON: dim(160, [400, 210]),
 };

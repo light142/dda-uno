@@ -143,7 +143,22 @@ export class CardDealer {
         const offset = CARD_OFFSET_TO_CENTER[player.position] || { x: 0, y: 0 };
         const centerX = player.x + offset.x;
         const centerY = player.y + offset.y;
-        const spacing = player.isLocal ? localPlayerSpacing : defaultSpacing;
+        let spacing = player.isLocal ? localPlayerSpacing : defaultSpacing;
+
+        // Cap hand width so cards overlap more instead of overflowing
+        if (cardCount > 1) {
+            const idealWidth = (cardCount - 1) * spacing;
+            let maxWidth;
+            if (player.isLocal) {
+                maxWidth = LOCAL_PLAYER_HAND.MAX_HAND_WIDTH;
+            } else {
+                const fanConfig = OTHER_PLAYER_FAN[player.position];
+                maxWidth = fanConfig && fanConfig.maxHandWidth;
+            }
+            if (maxWidth && idealWidth > maxWidth) {
+                spacing = maxWidth / (cardCount - 1);
+            }
+        }
 
         // Horizontal layout for dealing
         const totalWidth = (cardCount - 1) * spacing;
@@ -171,9 +186,14 @@ export class CardDealer {
         const offset = CARD_OFFSET_TO_CENTER[player.position] || { x: 0, y: 0 };
         const centerX = player.x + offset.x;
         const centerY = player.y + offset.y;
-        const spacing = CARD_SPACING.LOCAL_PLAYER;
         const maxRotation = LOCAL_PLAYER_HAND.MAX_ROTATION;
         const verticalLift = LOCAL_PLAYER_HAND.VERTICAL_LIFT;
+
+        // Shrink spacing when hand exceeds max width so cards overlap more
+        const idealWidth = (cardCount - 1) * CARD_SPACING.LOCAL_PLAYER;
+        const spacing = idealWidth > LOCAL_PLAYER_HAND.MAX_HAND_WIDTH && cardCount > 1
+            ? LOCAL_PLAYER_HAND.MAX_HAND_WIDTH / (cardCount - 1)
+            : CARD_SPACING.LOCAL_PLAYER;
 
         const totalWidth = (cardCount - 1) * spacing;
         const startX = centerX - totalWidth / 2;
@@ -225,7 +245,16 @@ export class CardDealer {
         const offset = CARD_OFFSET_TO_CENTER[player.position] || { x: 0, y: 0 };
         const centerX = player.x + offset.x;
         const centerY = player.y + offset.y;
-        const totalSpread = (cardCount - 1) * config.spacing;
+
+        // Shrink spacing when hand exceeds max width
+        let spacing = config.spacing;
+        if (config.maxHandWidth && cardCount > 1) {
+            const idealWidth = (cardCount - 1) * spacing;
+            if (idealWidth > config.maxHandWidth) {
+                spacing = config.maxHandWidth / (cardCount - 1);
+            }
+        }
+        const totalSpread = (cardCount - 1) * spacing;
 
         // Spread direction vector
         const spreadRad = Phaser.Math.DegToRad(config.spreadAngle);

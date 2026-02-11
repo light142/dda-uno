@@ -1,4 +1,4 @@
-import { DECK_VISUAL, DECK_OFFSET } from '../config/settings.js';
+import { DECK_VISUAL, DECK_OFFSET, SHUFFLE } from '../config/settings.js';
 import { ASSET_DIMENSIONS } from '../config/assetDimensions.js';
 
 /**
@@ -85,6 +85,171 @@ export class VisualDeck extends Phaser.GameObjects.Container {
                 if (callback) callback();
             }
         });
+    }
+
+    /**
+     * Casino-style interleaving shuffle animation.
+     * Phase 1 (Cut & Fan) — deck splits into two fanned-out halves
+     * Phase 2 (Interleave) — cards arc from each pile into a center stack, alternating
+     * Phase 3 (Square up)  — stack snaps back to original layout
+     * Repeats with increasing speed, ends with a bounce flourish.
+     * @param {Function} callback - Called when all shuffle passes complete
+     */
+    shuffle(callback) {
+        const half = Math.floor(this.stackLayers.length / 2);
+        const leftHalf = this.stackLayers.slice(0, half);
+        const rightHalf = this.stackLayers.slice(half);
+        const totalCards = this.stackLayers.length;
+
+        // Snapshot each sprite's resting state
+        const originals = this.stackLayers.map(s => ({
+            x: s.x, y: s.y, rotation: s.rotation,
+            scaleX: s.scaleX, scaleY: s.scaleY
+        }));
+
+        let pass = 0;
+
+        const doPass = () => {
+            // --- Final flourish: square-up bounce ---
+            if (pass >= SHUFFLE.PASSES) {
+                let bounced = 0;
+                this.stackLayers.forEach((sprite, i) => {
+                    const orig = originals[i];
+                    this.scene.tweens.add({
+                        targets: sprite,
+                        scaleX: orig.scaleX * SHUFFLE.BOUNCE_SCALE,
+                        scaleY: orig.scaleY * SHUFFLE.BOUNCE_SCALE,
+                        y: orig.y - 6,
+                        duration: SHUFFLE.BOUNCE_DURATION,
+                        ease: 'Quad.easeOut',
+                        yoyo: true,
+                        onComplete: () => {
+                            bounced++;
+                            if (bounced >= totalCards && callback) callback();
+                        }
+                    });
+                });
+                return;
+            }
+
+            // Each pass accelerates
+            const speed = 1 - pass * SHUFFLE.SPEED_RAMP;
+            const cutDur = Math.round(SHUFFLE.CUT_DURATION * speed);
+            const interleaveDur = Math.round(SHUFFLE.INTERLEAVE_DURATION * speed);
+            const interleaveStagger = Math.round(SHUFFLE.INTERLEAVE_STAGGER * speed);
+            const squareUpDur = Math.round(SHUFFLE.SQUARE_UP_DURATION * speed);
+            const pause = Math.round(SHUFFLE.PAUSE_BETWEEN * speed);
+
+            // ---- Phase 1: Cut & Fan ----
+            // Each half slides apart AND fans out (cards spread with Y spacing + rotation)
+            let cutDone = 0;
+            const onCutDone = () => {
+                cutDone++;
+                if (cutDone < totalCards) return;
+                this.scene.time.delayedCall(pause, startInterleave);
+            };
+
+            leftHalf.forEach((sprite, i) => {
+                const orig = originals[i];
+                this.scene.tweens.add({
+                    targets: sprite,
+                    x: orig.x - SHUFFLE.SPLIT_DISTANCE,
+                    y: orig.y - SHUFFLE.CUT_LIFT - i * SHUFFLE.FAN_SPREAD,
+                    rotation: -SHUFFLE.FAN_ROTATION * (i + 1),
+                    duration: cutDur,
+                    ease: 'Power2',
+                    onComplete: onCutDone
+                });
+            });
+
+            rightHalf.forEach((sprite, i) => {
+                const orig = originals[half + i];
+                this.scene.tweens.add({
+                    targets: sprite,
+                    x: orig.x + SHUFFLE.SPLIT_DISTANCE,
+                    y: orig.y - SHUFFLE.CUT_LIFT - i * SHUFFLE.FAN_SPREAD,
+                    rotation: SHUFFLE.FAN_ROTATION * (i + 1),
+                    duration: cutDur,
+                    ease: 'Power2',
+                    onComplete: onCutDone
+                });
+            });
+
+            // ---- Phase 2: Interleave (two-step: lift then place) ----
+            const startInterleave = () => {
+                // Alternating order: L[0], R[0], L[1], R[1], L[2], R[2]
+                const interleaveOrder = [];
+                for (let j = 0; j < half; j++) {
+                    interleaveOrder.push(leftHalf[j]);
+                    if (j < rightHalf.length) {
+                        interleaveOrder.push(rightHalf[j]);
+                    }
+                }
+
+                let interleaveDone = 0;
+                interleaveOrder.forEach((sprite, order) => {
+                    const targetY = -order * DECK_VISUAL.LAYER_OFFSET_Y;
+                    const totalDelay = order * interleaveStagger;
+
+                    // Step 1: Lift card off the pile
+                    this.scene.tweens.add({
+                        targets: sprite,
+                        y: sprite.y - SHUFFLE.INTERLEAVE_ARC,
+                        rotation: 0,
+                        duration: Math.round(interleaveDur * 0.4),
+                        delay: totalDelay,
+                        ease: 'Quad.easeOut',
+                        onStart: () => {
+                            this.bringToTop(sprite);
+                        },
+                        onComplete: () => {
+                            // Step 2: Arc down to center stack
+                            this.scene.tweens.add({
+                                targets: sprite,
+                                x: 0,
+                                y: targetY,
+                                duration: Math.round(interleaveDur * 0.6),
+                                ease: 'Quad.easeIn',
+                                onComplete: () => {
+                                    interleaveDone++;
+                                    if (interleaveDone >= totalCards) {
+                                        this.scene.time.delayedCall(pause, startSquareUp);
+                                    }
+                                }
+                            });
+                        }
+                    });
+                });
+            };
+
+            // ---- Phase 3: Square Up ----
+            const startSquareUp = () => {
+                // Restore original rendering order
+                this.stackLayers.forEach(sprite => this.bringToTop(sprite));
+
+                let squareDone = 0;
+                this.stackLayers.forEach((sprite, i) => {
+                    const orig = originals[i];
+                    this.scene.tweens.add({
+                        targets: sprite,
+                        x: orig.x,
+                        y: orig.y,
+                        rotation: orig.rotation,
+                        duration: squareUpDur,
+                        ease: 'Back.easeOut',
+                        onComplete: () => {
+                            squareDone++;
+                            if (squareDone >= totalCards) {
+                                pass++;
+                                this.scene.time.delayedCall(40, doPass);
+                            }
+                        }
+                    });
+                });
+            };
+        };
+
+        doPass();
     }
 
     /**

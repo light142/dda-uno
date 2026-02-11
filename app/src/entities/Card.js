@@ -197,7 +197,7 @@ export class Card extends Phaser.GameObjects.Image {
     animateToFanPosition(x, y, rotation, delay, callback) {
         this.scene.tweens.add({
             targets: this,
-            y: y - 30,
+            y: y - 15,
             duration: 150,
             delay: delay,
             ease: 'Quad.easeOut',
