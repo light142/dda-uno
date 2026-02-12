@@ -211,16 +211,82 @@ export const UNO_BUTTON = {
 };
 
 export const PLAYABLE_GLOW = {
-    COLOR: 0x00FF00,
-    OUTER_STRENGTH: 4,
-    INNER_STRENGTH: 0,
-    KNOCKOUT: false,
-    QUALITY: 0.5,
-    DISTANCE: 10,
-    // Pulse animation
-    PULSE_MIN: 2,
-    PULSE_MAX: 5,
-    PULSE_DURATION: 800,
+    COLOR: 0xffcc00,
+    STRENGTH: 40,
+    QUALITY: 0.05,
+    DISTANCE: 6,
+};
+
+export const UNPLAYABLE_GLOW = {
+    COLOR: 0xffffff,
+    STRENGTH: 3,
+    QUALITY: 0.05,
+    DISTANCE: 4,
+};
+
+export const POWER_CARD_FX = {
+    REVERSE: {
+        SCALE: 3.0,
+        SPIN: Math.PI * 2,
+        DURATION: 700,
+        TINT: 0xffcc00,
+    },
+    BLOCK: {
+        SCALE: 2.5,
+        SHAKE: 12,
+        DURATION: 500,
+        TINT: 0xff3333,
+    },
+    PLUS2: {
+        SCALE: 2.5,
+        SPREAD: 60,
+        DURATION: 600,
+        TINT: 0xff8800,
+    },
+    WILD: {
+        SCALE: 3.0,
+        DURATION: 800,
+        COLORS: [0xff3333, 0x3399ff, 0x33cc33, 0xffdd00],
+    },
+    PLUS4: {
+        SCALE: 3.5,
+        SPREAD: 80,
+        DURATION: 700,
+        COLORS: [0xff3333, 0x3399ff, 0x33cc33, 0xffdd00],
+    },
+};
+
+export const COLOR_PICKER = {
+    OVERLAY: {
+        WIDTH: 340,
+        HEIGHT: 160,
+        CORNER_RADIUS: 20,
+        BG_COLOR: 0x000000,
+        BG_ALPHA: 0.82,
+        BORDER_COLOR: 0xFFD700,
+        BORDER_WIDTH: 2,
+        BORDER_ALPHA: 0.5,
+    },
+    X: 640,
+    Y: 335,
+    DEPTH: 150,
+    CARD_SPACING: 75,
+    CARD_SCALE: 1.0,
+    BOUNCE_IN_MS: 300,
+    FADE_OUT_MS: 200,
+    CARD_HOVER_SCALE: 1.15,
+    CARD_HOVER_DURATION: 120,
+    TITLE: {
+        TEXT: 'Choose a color',
+        FONT_SIZE: 16,
+        COLOR: '#ECDABD',
+        OFFSET_Y: -55,
+    },
+};
+
+export const COLOR_REPLACE = {
+    FADE_DURATION: 350,
+    BOT_DELAY: 500,
 };
 
 export const DRAG_DROP = {

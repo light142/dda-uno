@@ -7,7 +7,7 @@ import { DirectionArrow } from '../entities/DirectionArrow.js';
 import { PassButton } from '../entities/PassButton.js';
 import { UnoButton } from '../entities/UnoButton.js';
 import { Card } from '../entities/Card.js';
-import { CARD_OFFSET_TO_CENTER, DRAG_DROP, ANIMATION } from '../config/settings.js';
+import { CARD_OFFSET_TO_CENTER, DRAG_DROP, ANIMATION, POWER_CARD_FX, COLOR_REPLACE } from '../config/settings.js';
 import { GameLogic } from '../logic/GameLogic.js';
 import { MoveExecutor } from '../systems/MoveExecutor.js';
 import { StateManager } from '../systems/StateManager.js';
@@ -16,6 +16,7 @@ import { EmoteSystem } from '../systems/EmoteSystem.js';
 import { ApiClient } from '../api/ApiClient.js';
 import { GameApiAdapter } from '../api/GameApiAdapter.js';
 import { ErrorPopup } from '../ui/ErrorPopup.js';
+import { ColorPicker } from '../ui/ColorPicker.js';
 
 export class GameScene extends Phaser.Scene {
     constructor() {
@@ -206,7 +207,7 @@ export class GameScene extends Phaser.Scene {
      * Animate the starter discard card from deck to play zone center.
      * Card data was already determined by the simulator.
      */
-    _animateStarterCard(starterCardData, onComplete) {
+    async _animateStarterCard(starterCardData, onComplete) {
         if (!starterCardData) {
             if (onComplete) onComplete();
             return;
@@ -216,24 +217,34 @@ export class GameScene extends Phaser.Scene {
         const zone = DRAG_DROP.PLAY_ZONE;
         const targetPos = { x: zone.X, y: zone.Y };
 
-        this.dealer.dealToPlayer(
-            { isLocal: false, addCard: () => {} },
-            starterCardData,
-            targetPos,
-            (card) => {
-                // Match discard pile size (slideTo uses CARD_SCALE.INITIAL which is smaller)
-                const dims = ASSET_DIMENSIONS.CARD;
-                card.setDisplaySize(dims.WIDTH, dims.HEIGHT);
-                card.baseScaleX = card.scaleX;
-                card.baseScaleY = card.scaleY;
+        const card = await new Promise(resolve => {
+            this.dealer.dealToPlayer(
+                { isLocal: false, addCard: () => {} },
+                starterCardData,
+                targetPos,
+                (c) => {
+                    const dims = ASSET_DIMENSIONS.CARD;
+                    c.setDisplaySize(dims.WIDTH, dims.HEIGHT);
+                    c.baseScaleX = c.scaleX;
+                    c.baseScaleY = c.scaleY;
 
-                card.flip(() => {
-                    this.discardPile.push(card);
-                    if (onComplete) onComplete();
-                });
-            },
-            { depth: 2, slideDuration: ANIMATION.SLIDE_DURATION }
-        );
+                    c.flip(() => {
+                        this.discardPile.push(c);
+                        resolve(c);
+                    });
+                },
+                { depth: 2, slideDuration: ANIMATION.SLIDE_DURATION }
+            );
+        });
+
+        // If starter is a wild, let the player choose a color
+        if (GameLogic.isWildCard(starterCardData)) {
+            const chosenColor = await ColorPicker.show(this, starterCardData.value);
+            this.activeColor = chosenColor;
+            await this._animateColorReplacement(card, starterCardData.value, chosenColor);
+        }
+
+        if (onComplete) onComplete();
     }
 
     // ── Play Zone Visuals ────────────────────────────────
@@ -461,13 +472,13 @@ export class GameScene extends Phaser.Scene {
 
         this.disablePlayerTurn();
 
-        // Choose color for wilds
+        // If wild card, show color picker before animating
         let chosenColor = null;
         if (GameLogic.isWildCard(cardData)) {
-            chosenColor = this._autoChooseColor(player);
+            chosenColor = await ColorPicker.show(this, cardData.value);
         }
 
-        // OPTIMISTIC: Animate card to center immediately
+        // Animate card to center
         player.removeCard(card);
         if (player.cards.length === 1 && player.isLocal) {
             this.unoButton.enable();
@@ -482,14 +493,21 @@ export class GameScene extends Phaser.Scene {
         const y = zone.Y + Phaser.Math.FloatBetween(-scatter.OFFSET, scatter.OFFSET);
         const rotation = Phaser.Math.FloatBetween(-scatter.ROTATION, scatter.ROTATION);
 
-        card.playToCenter(x, y, rotation, () => {
-            this.discardPile.push(card);
-            if (effect.type === 'reverse') {
-                this.playReverseEffect(card);
-            }
+        // Wait for card to land at center
+        await new Promise(resolve => {
+            card.playToCenter(x, y, rotation, () => {
+                this.discardPile.push(card);
+                this.playPowerCardEffect(card, cardData.value);
+                resolve();
+            });
         });
 
         this.refanCards(player);
+
+        // If wild card, flip to colored version after landing
+        if (chosenColor) {
+            await this._animateColorReplacement(card, cardData.value, chosenColor);
+        }
 
         try {
             const result = await this.gameAdapter.playerPlay(cardData, chosenColor);
@@ -665,6 +683,7 @@ export class GameScene extends Phaser.Scene {
                 card.addPlayableGlow();
             } else {
                 card.removePlayableGlow();
+                card.addUnplayableTint();
             }
         });
     }
@@ -795,9 +814,9 @@ export class GameScene extends Phaser.Scene {
             this.emoteSystem.playEmote(playerIndex, 'uno');
         }
 
-        // Wild (not plus4) → evil emote on the player who played it
+        // Wild (not plus4) → eyes emote on the player who played it
         if (cardData.value === 'wild') {
-            this.emoteSystem.playEmote(playerIndex, 'evil');
+            this.emoteSystem.playEmote(playerIndex, 'eyes');
         }
         // Penalty cards → victim reacts with angry/cry/sad
         if (effect.type === 'reverse') {
@@ -815,33 +834,164 @@ export class GameScene extends Phaser.Scene {
     // ── Visual Effects ────────────────────────────────────
 
     /**
-     * Phantom glow effect for reverse cards — a copy of the card
-     * that scales up and fades out.
-     * @param {Card} card - the reverse card that was just played
+     * Play a dramatic visual effect when a power card lands.
      */
-    playReverseEffect(card) {
-        const phantom = this.add.image(card.x, card.y, card.cardFaceKey);
-        phantom.setDisplaySize(card.displayWidth, card.displayHeight);
-        phantom.setRotation(card.rotation);
-        phantom.setDepth(card.depth + 1);
-        phantom.setAlpha(0.7);
-        phantom.setTint(0xffffff);
-
-        // Glow bloom via preFX if available
-        if (phantom.preFX) {
-            phantom.preFX.addGlow(0xffffff, 4, 0, false, 0.1, 16);
+    playPowerCardEffect(card, cardValue) {
+        switch (cardValue) {
+            case 'reverse': this._fxReverse(card); break;
+            case 'block':   this._fxBlock(card);   break;
+            case 'plus2':   this._fxPlus2(card);   break;
+            case 'wild':    this._fxWild(card);     break;
+            case 'plus4':   this._fxPlus4(card);    break;
         }
+    }
 
+    /** @deprecated alias kept for external callers */
+    playReverseEffect(card) { this.playPowerCardEffect(card, 'reverse'); }
+
+    // ── Power-card FX helpers ────────────────────────────
+
+    _createPhantom(card, tint) {
+        const p = this.add.image(card.x, card.y, card.cardFaceKey);
+        p.setDisplaySize(card.displayWidth, card.displayHeight);
+        p.setRotation(card.rotation);
+        p.setDepth(card.depth + 1);
+        p.setAlpha(0.8);
+        if (tint != null) p.setTint(tint);
+        return p;
+    }
+
+    /** Reverse — spin + scale up + fade */
+    _fxReverse(card) {
+        const cfg = POWER_CARD_FX.REVERSE;
+        const p = this._createPhantom(card, cfg.TINT);
         this.tweens.add({
-            targets: phantom,
-            scaleX: phantom.scaleX * 2.5,
-            scaleY: phantom.scaleY * 2.5,
+            targets: p,
+            scaleX: p.scaleX * cfg.SCALE,
+            scaleY: p.scaleY * cfg.SCALE,
+            rotation: p.rotation + cfg.SPIN,
             alpha: 0,
-            duration: 600,
+            duration: cfg.DURATION,
             ease: 'Power2',
-            onComplete: () => {
-                phantom.destroy();
-            }
+            onComplete: () => p.destroy(),
+        });
+    }
+
+    /** Block/Skip — shake + red flash + fade */
+    _fxBlock(card) {
+        const cfg = POWER_CARD_FX.BLOCK;
+        const p = this._createPhantom(card, cfg.TINT);
+        const originX = p.x;
+        // rapid shake then fade
+        this.tweens.add({
+            targets: p,
+            x: originX + cfg.SHAKE,
+            duration: 50,
+            yoyo: true,
+            repeat: 5,
+            ease: 'Sine.easeInOut',
+        });
+        this.tweens.add({
+            targets: p,
+            scaleX: p.scaleX * cfg.SCALE,
+            scaleY: p.scaleY * cfg.SCALE,
+            alpha: 0,
+            duration: cfg.DURATION,
+            ease: 'Power2',
+            onComplete: () => p.destroy(),
+        });
+    }
+
+    /** Plus2 — two phantoms burst diagonally */
+    _fxPlus2(card) {
+        const cfg = POWER_CARD_FX.PLUS2;
+        for (let i = 0; i < 2; i++) {
+            const p = this._createPhantom(card, cfg.TINT);
+            const dir = i === 0 ? -1 : 1;
+            this.tweens.add({
+                targets: p,
+                x: p.x + cfg.SPREAD * dir,
+                y: p.y - cfg.SPREAD,
+                scaleX: p.scaleX * cfg.SCALE,
+                scaleY: p.scaleY * cfg.SCALE,
+                alpha: 0,
+                duration: cfg.DURATION,
+                ease: 'Power2',
+                onComplete: () => p.destroy(),
+            });
+        }
+    }
+
+    /** Wild — single phantom cycles through all 4 UNO colors */
+    _fxWild(card) {
+        const cfg = POWER_CARD_FX.WILD;
+        const p = this._createPhantom(card, cfg.COLORS[0]);
+        let step = 0;
+        const colorTimer = this.time.addEvent({
+            delay: cfg.DURATION / (cfg.COLORS.length * 2),
+            repeat: cfg.COLORS.length * 2 - 1,
+            callback: () => { step++; p.setTint(cfg.COLORS[step % cfg.COLORS.length]); },
+        });
+        this.tweens.add({
+            targets: p,
+            scaleX: p.scaleX * cfg.SCALE,
+            scaleY: p.scaleY * cfg.SCALE,
+            alpha: 0,
+            duration: cfg.DURATION,
+            ease: 'Power2',
+            onComplete: () => { colorTimer.destroy(); p.destroy(); },
+        });
+    }
+
+    /** Plus4 — four phantoms burst in cardinal directions, each a different UNO color */
+    _fxPlus4(card) {
+        const cfg = POWER_CARD_FX.PLUS4;
+        const dirs = [
+            { x: -1, y: -1 }, { x: 1, y: -1 },
+            { x: -1, y: 1 },  { x: 1, y: 1 },
+        ];
+        dirs.forEach((d, i) => {
+            const p = this._createPhantom(card, cfg.COLORS[i]);
+            this.tweens.add({
+                targets: p,
+                x: p.x + cfg.SPREAD * d.x,
+                y: p.y + cfg.SPREAD * d.y,
+                scaleX: p.scaleX * cfg.SCALE,
+                scaleY: p.scaleY * cfg.SCALE,
+                alpha: 0,
+                duration: cfg.DURATION,
+                ease: 'Power2',
+                onComplete: () => p.destroy(),
+            });
+        });
+    }
+
+    /**
+     * Cross-fade the discard pile card to the colored wild variant.
+     */
+    _animateColorReplacement(card, cardValue, chosenColor) {
+        return new Promise((resolve) => {
+            const textureKey = `${cardValue}_${chosenColor}`;
+
+            // Place colored version on top, fade it in
+            const overlay = this.add.image(card.x, card.y, textureKey);
+            overlay.setDisplaySize(card.displayWidth, card.displayHeight);
+            overlay.setRotation(card.rotation);
+            overlay.setDepth(card.depth + 0.5);
+            overlay.setAlpha(0);
+
+            this.tweens.add({
+                targets: overlay,
+                alpha: 1,
+                duration: COLOR_REPLACE.FADE_DURATION,
+                ease: 'Sine.easeInOut',
+                onComplete: () => {
+                    card.setTexture(textureKey);
+                    card.cardFaceKey = textureKey;
+                    overlay.destroy();
+                    resolve();
+                }
+            });
         });
     }
 

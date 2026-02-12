@@ -14,7 +14,7 @@ export function loadAssets(scene) {
     scene.load.spritesheet('emote_uno', 'assets/images/emotes/uno-emote.png', { frameWidth: 180, frameHeight: 180 });
     scene.load.spritesheet('emote_gg', 'assets/images/emotes/gg-emote.png', { frameWidth: 180, frameHeight: 180 });
     scene.load.spritesheet('emote_angry', 'assets/images/emotes/angry-emote.png', { frameWidth: 180, frameHeight: 180 });
-    scene.load.spritesheet('emote_evil', 'assets/images/emotes/evil-emote.png', { frameWidth: 180, frameHeight: 180 });
+    scene.load.spritesheet('emote_eyes', 'assets/images/emotes/eyes-emote.png', { frameWidth: 180, frameHeight: 180 });
     scene.load.spritesheet('emote_cry', 'assets/images/emotes/cry-emote.png', { frameWidth: 180, frameHeight: 180 });
     scene.load.spritesheet('emote_sad', 'assets/images/emotes/sad-emote.png', { frameWidth: 180, frameHeight: 180 });
     scene.load.spritesheet('emote_greet', 'assets/images/emotes/greet-emote.png', { frameWidth: 180, frameHeight: 180 });
@@ -63,6 +63,16 @@ export function loadAssets(scene) {
         const basePath = `assets/images/cards/special/${fileCode}.png`;
         scene.load.image(card, basePath);
     });
+
+    // Load colored wild card variants (for color selection display)
+    COLORS.forEach(color => {
+        const ci = COLOR_INITIALS[color];
+        WILD_CARDS.forEach(card => {
+            const fileCode = WILD_FILE_CODES[card];
+            const basePath = `assets/images/cards/special/${ci}${fileCode}.png`;
+            scene.load.image(`${card}_${color}`, basePath);
+        });
+    });
 }
 
 // Emote animation configs
@@ -70,7 +80,7 @@ const EMOTE_ANIMS = [
     { key: 'uno', frames: 36, frameRate: 13, repeat: 0 },
     { key: 'gg', frames: 36, frameRate: 9, repeat: 0 },
     { key: 'angry', frames: 36, frameRate: 13, repeat: 0 },
-    { key: 'evil', frames: 30, frameRate: 13, repeat: 0 },
+    { key: 'eyes', frames: 30, frameRate: 13, repeat: 0 },
     { key: 'cry', frames: 36, frameRate: 13, repeat: 0 },
     { key: 'sad', frames: 36, frameRate: 13, repeat: 0 },
     { key: 'greet', frames: 36, frameRate: 9, repeat: 0 },

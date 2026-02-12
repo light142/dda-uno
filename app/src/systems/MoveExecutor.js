@@ -1,6 +1,6 @@
 import { GameLogic } from '../logic/GameLogic.js';
 import { Card } from '../entities/Card.js';
-import { DRAG_DROP, BOT_TURN, ANIMATION } from '../config/settings.js';
+import { DRAG_DROP, BOT_TURN, ANIMATION, COLOR_REPLACE } from '../config/settings.js';
 
 /**
  * MoveExecutor — animates an array of bot moves sequentially.
@@ -131,8 +131,12 @@ export class MoveExecutor {
 
         card.playToCenter(x, y, rotation, () => {
             this.scene.discardPile.push(card);
-            if (effect.type === 'reverse') {
-                this.scene.playReverseEffect(card);
+            this.scene.playPowerCardEffect(card, move.card.value);
+
+            if (move.chosenColor && (move.card.value === 'wild' || move.card.value === 'plus4')) {
+                this.scene.scheduleTimer(COLOR_REPLACE.BOT_DELAY, () => {
+                    this.scene._animateColorReplacement(card, move.card.value, move.chosenColor);
+                });
             }
         });
 

@@ -10,7 +10,7 @@ export const COLOR_CARD_VALUES = [...NUMBER_VALUES, ...ACTION_VALUES];
 export const COLOR_INITIALS = { blue: 'b', green: 'g', red: 'r', yellow: 'y' };
 
 // Mapping from action value to file-name code
-export const ACTION_FILE_CODES = { plus2: 'p2', block: 'b', reverse: 'r' };
+export const ACTION_FILE_CODES = { plus2: 'p2', block: 'b', reverse: 'r', wild: 'w', plus4: 'p4' };
 
 // Mapping from wild card value to file-name code
 export const WILD_FILE_CODES = { wild: 'w', plus4: 'p4' };

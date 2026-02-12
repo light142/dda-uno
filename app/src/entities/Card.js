@@ -1,4 +1,4 @@
-import { ANIMATION, CARD_SCALE, DRAG_DROP, PLAYABLE_GLOW } from '../config/settings.js';
+import { ANIMATION, CARD_SCALE, DRAG_DROP, PLAYABLE_GLOW, UNPLAYABLE_GLOW } from '../config/settings.js';
 import { ASSET_DIMENSIONS } from '../config/assetDimensions.js';
 /**
  * Card entity class
@@ -342,33 +342,33 @@ export class Card extends Phaser.GameObjects.Image {
     }
 
     /**
-     * Add a pulsing glow to indicate this card is playable
+     * Golden glow to indicate this card is playable
      */
     addPlayableGlow() {
-        if (this.glowFX || !this.postFX) return;
-        const cfg = PLAYABLE_GLOW;
-        this.glowFX = this.postFX.addGlow(
-            cfg.COLOR, cfg.OUTER_STRENGTH, cfg.INNER_STRENGTH,
-            cfg.KNOCKOUT, cfg.QUALITY, cfg.DISTANCE
-        );
-        // this.glowPulse = this.scene.tweens.add({
-        //     targets: this.glowFX,
-        //     outerStrength: cfg.PULSE_MAX,
-        //     duration: cfg.PULSE_DURATION,
-        //     yoyo: true,
-        //     repeat: -1,
-        //     ease: 'Sine.easeInOut',
-        // });
+        if (this.glowFX) return;
+        // this._addGlow(PLAYABLE_GLOW);
     }
 
     /**
-     * Remove the playable glow effect
+     * White glow to indicate it is not playable
+     */
+    addUnplayableTint() {
+        if (this.glowFX) return;
+        // this._addGlow(UNPLAYABLE_GLOW);
+    }
+
+    _addGlow(cfg) {
+        if (!this.postFX) return;
+        this.glowFX = this.postFX.addGlow(
+            cfg.COLOR, cfg.STRENGTH, 0,
+            false, cfg.QUALITY, cfg.DISTANCE
+        );
+    }
+
+    /**
+     * Remove glow effect
      */
     removePlayableGlow() {
-        if (this.glowPulse) {
-            this.glowPulse.stop();
-            this.glowPulse = null;
-        }
         if (this.glowFX && this.postFX) {
             this.postFX.remove(this.glowFX);
             this.glowFX = null;
