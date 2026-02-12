@@ -164,9 +164,9 @@ export class Card extends Phaser.GameObjects.Image {
     /**
      * Slide card to a position
      */
-    slideTo(x, y, duration, callback) {
+    slideTo(x, y, duration, callback, targetRotation = 0) {
         this.originalY = y;
-        this.originalRotation = 0;
+        this.originalRotation = targetRotation;
         this.rotation = Phaser.Math.DegToRad(180);
 
         // Switch from deck texture to player-appropriate texture
@@ -179,7 +179,7 @@ export class Card extends Phaser.GameObjects.Image {
             targets: this,
             x: x,
             y: y,
-            rotation: 0,
+            rotation: targetRotation,
             displayWidth: dims.width,
             displayHeight: dims.height,
             duration: duration,

@@ -11,6 +11,7 @@ export class VisualDeck extends Phaser.GameObjects.Container {
 
         this.scene = scene;
         this.stackLayers = [];
+        this.visualRemaining = 0;
         this.rotation = Phaser.Math.DegToRad(DECK_VISUAL.ROTATION);
 
         // Add this container to the scene
@@ -81,9 +82,37 @@ export class VisualDeck extends Phaser.GameObjects.Container {
                 topCard.y = originalY;
                 topCard.alpha = 1;
 
+                // Decrement visual counter and update layers
+                if (this.scene.deckTotal) {
+                    this.visualRemaining = Math.max(0, this.visualRemaining - 1);
+                    this.updateLayers(this.visualRemaining, this.scene.deckTotal);
+                }
+
                 // Call callback to continue with card dealing
                 if (callback) callback();
             }
+        });
+    }
+
+    /**
+     * Update visible layers based on remaining cards in the deck.
+     * @param {number} remaining - cards left in the deck
+     * @param {number} total - total cards the deck started with
+     */
+    updateLayers(remaining, total) {
+        const max = DECK_VISUAL.STACK_LAYERS;
+        const min = DECK_VISUAL.MIN_LAYERS;
+
+        let visible;
+        if (remaining <= min) {
+            visible = remaining;
+        } else {
+            const ratio = Math.max(0, Math.min(1, remaining / total));
+            visible = Math.max(min, Math.round(max * ratio));
+        }
+
+        this.stackLayers.forEach((layer, i) => {
+            layer.setVisible(i < visible);
         });
     }
 
@@ -262,6 +291,10 @@ export class VisualDeck extends Phaser.GameObjects.Container {
             layer.setAlpha(1);
             layer.setVisible(true);
         });
+        // Sync visual counter with actual deck
+        if (this.scene.deckTotal) {
+            this.visualRemaining = this.scene.deckTotal;
+        }
     }
 
     /**

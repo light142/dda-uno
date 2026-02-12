@@ -5,7 +5,7 @@ export class UnoButton {
     constructor(scene, onPress) {
         this.scene = scene;
         this.onPress = onPress;
-        this.enabled = true;
+        this.enabled = false;
 
         const { X, Y, DEPTH, ALPHA, RAISE, SHADOW_ALPHA } = UNO_BUTTON;
         const { WIDTH, HEIGHT } = ASSET_DIMENSIONS.UNO_BUTTON;
@@ -24,12 +24,14 @@ export class UnoButton {
         this.sprite = scene.add.image(X, this.raisedY, 'uno_btn');
         this.sprite.setDisplaySize(WIDTH, HEIGHT);
         this.sprite.setDepth(DEPTH);
-        this.sprite.setAlpha(ALPHA.ACTIVE);
+        this.sprite.setAlpha(ALPHA.DISABLED);
 
         this.baseScaleX = this.sprite.scaleX;
         this.baseScaleY = this.sprite.scaleY;
 
+        this.ctaTween = null;
         this.setupInput();
+        this.sprite.input.cursor = 'default';
     }
 
     setupInput() {
@@ -110,14 +112,63 @@ export class UnoButton {
         this.enabled = true;
         this.sprite.setAlpha(UNO_BUTTON.ALPHA.ACTIVE);
         this.sprite.input.cursor = 'pointer';
+        this.startCTA();
     }
 
     disable() {
         this.enabled = false;
+        this.stopCTA();
         this.sprite.setAlpha(UNO_BUTTON.ALPHA.DISABLED);
         this.sprite.input.cursor = 'default';
         this.sprite.setScale(this.baseScaleX, this.baseScaleY);
         this.sprite.y = this.raisedY;
         this.shadow.setAlpha(UNO_BUTTON.SHADOW_ALPHA);
+    }
+
+    startCTA() {
+        this.stopCTA();
+        const { CTA } = UNO_BUTTON;
+        const angle = Phaser.Math.DegToRad(CTA.ANGLE);
+        const targets = [this.sprite, this.shadow];
+
+        // Start tilted left
+        targets.forEach(t => t.setRotation(-angle));
+
+        // Subtle pendulum tilt
+        this.ctaTween = this.scene.tweens.add({
+            targets,
+            rotation: angle,
+            duration: CTA.DURATION,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut',
+        });
+
+        // Wobbly squash-stretch on a different cycle
+        this.wobbleTween = this.scene.tweens.add({
+            targets,
+            scaleX: this.baseScaleX * CTA.WOBBLE_SCALE,
+            scaleY: this.baseScaleY * (2 - CTA.WOBBLE_SCALE),
+            duration: CTA.WOBBLE_DURATION,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut',
+        });
+    }
+
+    stopCTA() {
+        if (this.ctaTween) {
+            this.ctaTween.stop();
+            this.ctaTween = null;
+        }
+        if (this.wobbleTween) {
+            this.wobbleTween.stop();
+            this.wobbleTween = null;
+        }
+        this.scene.tweens.killTweensOf(this.sprite);
+        this.scene.tweens.killTweensOf(this.shadow);
+        this.sprite.setScale(this.baseScaleX, this.baseScaleY);
+        this.sprite.setRotation(0);
+        this.shadow.setRotation(0);
     }
 }

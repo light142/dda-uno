@@ -12,18 +12,18 @@ export class CardDealer {
         this.visualDeck = visualDeck;
     }
 
-    dealToPlayer(player, cardData, position, callback) {
+    dealToPlayer(player, cardData, position, callback, { depth, slideDuration } = {}) {
         // Trigger visual deck animation if available
         if (this.visualDeck) {
             this.visualDeck.dealCardAnimation(() => {
-                this.spawnAndSlideCard(player, cardData, position, callback);
+                this.spawnAndSlideCard(player, cardData, position, callback, { depth, slideDuration });
             });
         } else {
-            this.spawnAndSlideCard(player, cardData, position, callback);
+            this.spawnAndSlideCard(player, cardData, position, callback, { depth, slideDuration });
         }
     }
 
-    spawnAndSlideCard(player, cardData, position, callback) {
+    spawnAndSlideCard(player, cardData, position, callback, { depth, slideDuration } = {}) {
         const card = new Card(
             this.scene,
             this.deckX,
@@ -33,28 +33,58 @@ export class CardDealer {
             player.isLocal
         );
 
+        if (depth !== undefined) card.setDepth(depth);
+
+        const duration = slideDuration || ANIMATION.SLIDE_DURATION;
+
         this.scene.sound.stopByKey('place_card_sound');
         this.scene.sound.play('place_card_sound');
 
-        card.slideTo(position.x, position.y, ANIMATION.SLIDE_DURATION, () => {
+        card.slideTo(position.x, position.y, duration, () => {
             player.addCard(card);
             if (callback) callback(card);
-        });
+        }, position.rotation || 0);
     }
 
-    dealToMultiplePlayers(players, cardsPerPlayer, deck, onComplete) {
+    /**
+     * Deal pre-determined cards to all players with animations.
+     * @param {Array<Player>} players
+     * @param {Array<Array<{suit, value}>>} playerHands - playerHands[i] = cards for player i
+     * @param {Function} onComplete
+     */
+    dealToMultiplePlayers(players, playerHands, onComplete) {
+        const cardsPerPlayer = playerHands[0]?.length || 0;
         const totalCards = cardsPerPlayer * players.length;
         let dealtCount = 0;
 
-        // Deal round-robin
         for (let round = 0; round < cardsPerPlayer; round++) {
             players.forEach((player, playerIndex) => {
                 const cardIndex = round * players.length + playerIndex;
-                const cardData = deck.draw();
+                const cardData = playerHands[playerIndex][round];
                 const positions = this.calculatePositions(player, cardsPerPlayer, CARD_SPACING.OTHER_PLAYERS, CARD_SPACING.LOCAL_PLAYER);
 
+                const targetPos = player.position === 'right'
+                    ? positions[cardsPerPlayer - 1]
+                    : positions[round];
+
                 this.scene.time.delayedCall(cardIndex * ANIMATION.DEAL_DELAY, () => {
-                    this.dealToPlayer(player, cardData, positions[round], () => {
+                    if (player.position === 'right' && player.cards.length > 0) {
+                        const existingCount = player.cards.length;
+                        this.scene.time.delayedCall(200, () => {
+                            player.cards.forEach((card, i) => {
+                                const newPos = positions[cardsPerPlayer - 1 - existingCount + i];
+                                this.scene.tweens.add({
+                                    targets: card,
+                                    x: newPos.x,
+                                    y: newPos.y,
+                                    duration: 200,
+                                    ease: 'Power2',
+                                });
+                            });
+                        });
+                    }
+
+                    this.dealToPlayer(player, cardData, targetPos, () => {
                         dealtCount++;
                         if (dealtCount === totalCards && onComplete) {
                             onComplete();
@@ -179,8 +209,8 @@ export class CardDealer {
      * @param {Player} player - The local player
      * @returns {Array} Array of {x, y, rotation} for fan layout
      */
-    calculateFanPositions(player) {
-        const cardCount = player.cards.length;
+    calculateFanPositions(player, overrideCount) {
+        const cardCount = overrideCount || player.cards.length;
         const positions = [];
 
         const offset = CARD_OFFSET_TO_CENTER[player.position] || { x: 0, y: 0 };
@@ -237,13 +267,13 @@ export class CardDealer {
     /**
      * Calculate fan positions for other players' cards (3D-style arrangement)
      */
-    calculateOtherPlayerFanPositions(player) {
+    calculateOtherPlayerFanPositions(player, overrideCount) {
         const config = OTHER_PLAYER_FAN[player.position];
         if (!config) return null;
 
-        const cardCount = player.cards.length;
+        const cardCount = overrideCount || player.cards.length;
         const offset = CARD_OFFSET_TO_CENTER[player.position] || { x: 0, y: 0 };
-        const centerX = player.x + offset.x;
+        let centerX = player.x + offset.x;
         const centerY = player.y + offset.y;
 
         // Shrink spacing when hand exceeds max width
@@ -255,6 +285,11 @@ export class CardDealer {
             }
         }
         const totalSpread = (cardCount - 1) * spacing;
+
+        // Anchor the avatar-nearest edge so fewer cards stay close to the avatar
+        const maxSpread = (7 - 1) * config.spacing;
+        const anchorShift = (totalSpread - maxSpread) / 2 * Math.sign(offset.x);
+        centerX += anchorShift;
 
         // Spread direction vector
         const spreadRad = Phaser.Math.DegToRad(config.spreadAngle);

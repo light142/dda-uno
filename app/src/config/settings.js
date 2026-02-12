@@ -40,7 +40,9 @@ export const ANIMATION = {
     DEAL_DELAY: 220,
     FLIP_DURATION: 100,
     SLIDE_DURATION: 300,
-    BOUNCE_DURATION: 100
+    BOUNCE_DURATION: 100,
+    PENALTY_DEAL_DELAY: 150,
+    PENALTY_SLIDE_DURATION: 200,
 };
 
 export const SHUFFLE = {
@@ -68,6 +70,7 @@ export const SHUFFLE = {
 export const DECK_VISUAL = {
     ROTATION: 0,
     STACK_LAYERS: 20,
+    MIN_LAYERS: 5,
     LAYER_OFFSET_X: 0.1,
     LAYER_OFFSET_Y: 0.7,
     CARD_POP_DURATION: 150,
@@ -181,7 +184,7 @@ export const UNO_BUTTON = {
     DEPTH: 10,
     ALPHA: {
         ACTIVE: 1,
-        DISABLED: 0.4,
+        DISABLED: 1,
     },
     PRESS: {
         DURATION: 20,
@@ -199,6 +202,12 @@ export const UNO_BUTTON = {
     RAISE: 4,
     SHADOW_ALPHA: 0.8,
     HIT_PADDING: 15,
+    CTA: {
+        ANGLE: 4,
+        DURATION: 400,
+        WOBBLE_SCALE: 1.03,
+        WOBBLE_DURATION: 600,
+    },
 };
 
 export const DRAG_DROP = {
@@ -232,7 +241,10 @@ export const DRAG_DROP = {
 export const BOT_TURN = {
     THINK_DELAY: 100,
     BETWEEN_BOTS: 600,
-    FLIP_TO_PLAY_DELAY: 300,
+    LIFT_OFFSET: 0,
+    LIFT_DURATION: 150,
+    LIFT_TO_FLIP_DELAY: 100,
+    FLIP_TO_FLY_DELAY: 350,
 };
 
 export const EMOTE_DISPLAY = {

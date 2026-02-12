@@ -45,6 +45,25 @@ export class DirectionArrow {
         });
     }
 
+    /**
+     * Instantly set direction without animation (for state restoration).
+     */
+    setDirection(isClockwise) {
+        if (this.idleSpinTween) {
+            this.idleSpinTween.stop();
+            this.idleSpinTween = null;
+        }
+        if (this.pulseTween) {
+            this.pulseTween.stop();
+            this.pulseTween = null;
+        }
+
+        this.isClockwise = isClockwise;
+        this.sprite.setTexture(isClockwise ? 'arrow' : 'r_arrow');
+        this.sprite.setAngle(0);
+        this.startIdle();
+    }
+
     toggle(onComplete) {
         const nextClockwise = !this.isClockwise;
         const { SHRINK_DURATION, GROW_DURATION, SPIN_ANGLE, EASE_IN, EASE_OUT } = DIRECTION_ARROW.TRANSITION;
