@@ -19,6 +19,7 @@ export class Deck {
                 if (value === '0') return;
                 this.cards.push({ suit: color, value });
                 this.cards.push({ suit: color, value });
+                // this.cards.push({ suit: color, value });
             });
         });
 

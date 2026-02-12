@@ -258,11 +258,11 @@ export const POWER_CARD_FX = {
 
 export const COLOR_PICKER = {
     OVERLAY: {
-        WIDTH: 340,
-        HEIGHT: 160,
-        CORNER_RADIUS: 20,
+        WIDTH: 560,
+        HEIGHT: 260,
+        CORNER_RADIUS: 24,
         BG_COLOR: 0x000000,
-        BG_ALPHA: 0.82,
+        BG_ALPHA: 0.85,
         BORDER_COLOR: 0xFFD700,
         BORDER_WIDTH: 2,
         BORDER_ALPHA: 0.5,
@@ -270,17 +270,18 @@ export const COLOR_PICKER = {
     X: 640,
     Y: 335,
     DEPTH: 150,
-    CARD_SPACING: 75,
-    CARD_SCALE: 1.0,
-    BOUNCE_IN_MS: 300,
-    FADE_OUT_MS: 200,
-    CARD_HOVER_SCALE: 1.15,
-    CARD_HOVER_DURATION: 120,
+    CARD_SPACING: 120,
+    CARD_SCALE: 1.5,
+    CARD_OFFSET_Y: 15,
+    BOUNCE_IN_MS: 200,
+    FADE_OUT_MS: 150,
+    CARD_HOVER_SCALE: 1.12,
+    CARD_HOVER_DURATION: 100,
     TITLE: {
         TEXT: 'Choose a color',
-        FONT_SIZE: 16,
+        FONT_SIZE: 20,
         COLOR: '#ECDABD',
-        OFFSET_Y: -55,
+        OFFSET_Y: -95,
     },
 };
 

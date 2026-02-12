@@ -22,12 +22,17 @@ export class ColorPicker {
             ColorPicker.dismiss(scene);
 
             const cfg = COLOR_PICKER;
+            let resolved = false;
 
             // Container for all picker elements
             const container = scene.add.container(cfg.X, cfg.Y);
             container.setDepth(cfg.DEPTH);
             container.setAlpha(0);
-            container.setScale(0);
+
+            // Full-screen blocker so taps outside don't pass through
+            const blocker = scene.add.rectangle(0, 0, 1280, 720, 0x000000, 0.01);
+            blocker.setInteractive();
+            container.add(blocker);
 
             // Dark background panel
             const bg = scene.add.graphics();
@@ -60,11 +65,13 @@ export class ColorPicker {
             const startX = -totalWidth / 2;
             const dims = ASSET_DIMENSIONS.CARD;
 
+            const cardImages = [];
+
             COLORS_LIST.forEach((color, i) => {
                 const textureKey = `${cardValue}_${color}`;
                 const cardImg = scene.add.image(
                     startX + i * cfg.CARD_SPACING,
-                    10,
+                    cfg.CARD_OFFSET_Y,
                     textureKey
                 );
                 cardImg.setDisplaySize(
@@ -78,6 +85,7 @@ export class ColorPicker {
                 cardImg.setInteractive({ useHandCursor: true });
 
                 cardImg.on('pointerover', () => {
+                    if (resolved) return;
                     scene.tweens.killTweensOf(cardImg);
                     scene.tweens.add({
                         targets: cardImg,
@@ -89,6 +97,7 @@ export class ColorPicker {
                 });
 
                 cardImg.on('pointerout', () => {
+                    if (resolved) return;
                     scene.tweens.killTweensOf(cardImg);
                     scene.tweens.add({
                         targets: cardImg,
@@ -99,43 +108,31 @@ export class ColorPicker {
                     });
                 });
 
-                cardImg.on('pointerdown', () => {
-                    scene.tweens.add({
-                        targets: cardImg,
-                        scaleX: baseScaleX * 1.25,
-                        scaleY: baseScaleY * 1.25,
-                        duration: 80,
-                        yoyo: true,
-                        ease: 'Sine.easeOut',
-                        onComplete: () => {
-                            ColorPicker.dismiss(scene);
-                            resolve(color);
-                        }
-                    });
+                // Use pointerup for reliable mobile taps
+                cardImg.on('pointerup', () => {
+                    if (resolved) return;
+                    resolved = true;
+
+                    // Disable all cards immediately
+                    cardImages.forEach(img => img.disableInteractive());
+
+                    // Resolve immediately — no animation delay
+                    ColorPicker.dismiss(scene);
+                    resolve(color);
                 });
 
                 container.add(cardImg);
+                cardImages.push(cardImg);
             });
 
             scene._colorPicker = container;
 
-            // Bounce-in animation
+            // Fade-in animation (no scale anim — avoids hit-area desync)
             scene.tweens.add({
                 targets: container,
                 alpha: 1,
-                scaleX: 1.05,
-                scaleY: 1.05,
-                duration: cfg.BOUNCE_IN_MS * 0.6,
-                ease: 'Back.easeOut',
-                onComplete: () => {
-                    scene.tweens.add({
-                        targets: container,
-                        scaleX: 1,
-                        scaleY: 1,
-                        duration: cfg.BOUNCE_IN_MS * 0.4,
-                        ease: 'Sine.easeOut',
-                    });
-                }
+                duration: cfg.BOUNCE_IN_MS,
+                ease: 'Sine.easeOut',
             });
         });
     }
