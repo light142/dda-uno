@@ -1,7 +1,7 @@
 export const SEAT_POSITIONS = [
     { position: 'bottom', x: 250, y: 600 },
     { position: 'left', x: 100, y: 250 },
-    { position: 'top', x: 640, y: 80 },
+    { position: 'top', x: 640, y: 100 },
     { position: 'right', x: 1180, y: 250 },
 ];
 
@@ -79,18 +79,18 @@ export const DECK_VISUAL = {
 
 export const AVATAR_NICKNAME_DISPLAY = {
     LOCAL_PLAYER: {
-        WIDTH: 130,
+        WIDTH: 120,
         HEIGHT: 30,
         CORNER_RADIUS: 12,
         FONT_SIZE: 16,
-        OFFSET_Y: 88
+        OFFSET_Y: 74
     },
     OTHER_PLAYERS: {
-        WIDTH: 100,
+        WIDTH: 90,
         HEIGHT: 26,
-        CORNER_RADIUS: 12,
+        CORNER_RADIUS: 10,
         FONT_SIZE: 14,
-        OFFSET_Y: 73
+        OFFSET_Y: 60
     },
     COLORS: {
         BG: 0x1a0a0a,
@@ -210,6 +210,19 @@ export const UNO_BUTTON = {
     },
 };
 
+export const PLAYABLE_GLOW = {
+    COLOR: 0x00FF00,
+    OUTER_STRENGTH: 4,
+    INNER_STRENGTH: 0,
+    KNOCKOUT: false,
+    QUALITY: 0.5,
+    DISTANCE: 10,
+    // Pulse animation
+    PULSE_MIN: 2,
+    PULSE_MAX: 5,
+    PULSE_DURATION: 800,
+};
+
 export const DRAG_DROP = {
     PLAY_ZONE: { X: 640, Y: 335, RADIUS: 150 },
     PLAY_ZONE_VISUAL: {
@@ -250,11 +263,11 @@ export const BOT_TURN = {
 export const EMOTE_DISPLAY = {
     LOCAL_PLAYER: {
         SCALE: 1,
-        OFFSET_Y: -35
+        OFFSET_Y: -32
     },
     OTHER_PLAYERS: {
-        SCALE: 1,
-        OFFSET_Y: -35
+        SCALE: 0.9,
+        OFFSET_Y: -32
     },
     FRAME_RATE: 6,
     DEPTH: 50

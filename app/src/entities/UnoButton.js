@@ -44,6 +44,7 @@ export class UnoButton {
 
         this.sprite.on('pointerover', () => {
             if (!this.enabled) return;
+            this.stopCTA();
             const { SCALE, DURATION, EASE } = UNO_BUTTON.HOVER;
             this.scene.tweens.add({
                 targets: this.sprite,
@@ -56,6 +57,8 @@ export class UnoButton {
 
         this.sprite.on('pointerout', () => {
             if (!this.enabled) return;
+            this.scene.tweens.killTweensOf(this.sprite);
+            this.scene.tweens.killTweensOf(this.shadow);
             this.scene.tweens.add({
                 targets: this.sprite,
                 scaleX: this.baseScaleX,
@@ -68,13 +71,15 @@ export class UnoButton {
                 targets: this.shadow,
                 alpha: UNO_BUTTON.SHADOW_ALPHA,
                 duration: UNO_BUTTON.HOVER.DURATION,
+                onComplete: () => { this.startCTA(); }
             });
         });
 
         this.sprite.on('pointerdown', () => {
             if (!this.enabled) return;
+            this.scene.tweens.killTweensOf(this.sprite);
+            this.scene.tweens.killTweensOf(this.shadow);
             const { DURATION, EASE } = UNO_BUTTON.PRESS;
-            // Snap sink — fast visual feedback
             this.scene.tweens.add({
                 targets: this.sprite,
                 y: this.baseY,
@@ -86,14 +91,14 @@ export class UnoButton {
                 alpha: 0.05,
                 duration: DURATION,
             });
-            // Fire callback immediately
             if (this.onPress) this.onPress();
         });
 
         this.sprite.on('pointerup', () => {
             if (!this.enabled) return;
+            this.scene.tweens.killTweensOf(this.sprite);
+            this.scene.tweens.killTweensOf(this.shadow);
             const { DURATION, EASE } = UNO_BUTTON.POP_BACK;
-            // Cosmetic pop-back
             this.scene.tweens.add({
                 targets: this.sprite,
                 y: this.raisedY,

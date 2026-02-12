@@ -45,10 +45,7 @@ export class DirectionArrow {
         });
     }
 
-    /**
-     * Instantly set direction without animation (for state restoration).
-     */
-    setDirection(isClockwise) {
+    stopIdle() {
         if (this.idleSpinTween) {
             this.idleSpinTween.stop();
             this.idleSpinTween = null;
@@ -57,6 +54,14 @@ export class DirectionArrow {
             this.pulseTween.stop();
             this.pulseTween = null;
         }
+        this.scene.tweens.killTweensOf(this.sprite);
+    }
+
+    /**
+     * Instantly set direction without animation (for state restoration).
+     */
+    setDirection(isClockwise) {
+        this.stopIdle();
 
         this.isClockwise = isClockwise;
         this.sprite.setTexture(isClockwise ? 'arrow' : 'r_arrow');
@@ -68,14 +73,7 @@ export class DirectionArrow {
         const nextClockwise = !this.isClockwise;
         const { SHRINK_DURATION, GROW_DURATION, SPIN_ANGLE, EASE_IN, EASE_OUT } = DIRECTION_ARROW.TRANSITION;
 
-        if (this.idleSpinTween) {
-            this.idleSpinTween.stop();
-            this.idleSpinTween = null;
-        }
-        if (this.pulseTween) {
-            this.pulseTween.stop();
-            this.pulseTween = null;
-        }
+        this.stopIdle();
 
         const { WIDTH, HEIGHT } = ASSET_DIMENSIONS.ARROW;
         const baseScaleX = WIDTH / this.sprite.texture.getSourceImage().width;

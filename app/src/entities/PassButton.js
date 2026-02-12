@@ -41,6 +41,8 @@ export class PassButton {
 
         this.sprite.on('pointerover', () => {
             if (!this.enabled) return;
+            this.scene.tweens.killTweensOf(this.sprite);
+            this.scene.tweens.killTweensOf(this.shadow);
             const { SCALE, DURATION, EASE } = PASS_BUTTON.HOVER;
             this.scene.tweens.add({
                 targets: this.sprite,
@@ -53,6 +55,8 @@ export class PassButton {
 
         this.sprite.on('pointerout', () => {
             if (!this.enabled) return;
+            this.scene.tweens.killTweensOf(this.sprite);
+            this.scene.tweens.killTweensOf(this.shadow);
             this.scene.tweens.add({
                 targets: this.sprite,
                 scaleX: this.baseScaleX,
@@ -70,8 +74,9 @@ export class PassButton {
 
         this.sprite.on('pointerdown', () => {
             if (!this.enabled) return;
+            this.scene.tweens.killTweensOf(this.sprite);
+            this.scene.tweens.killTweensOf(this.shadow);
             const { DURATION, EASE } = PASS_BUTTON.PRESS;
-            // Snap sink — fast visual feedback
             this.scene.tweens.add({
                 targets: this.sprite,
                 y: this.baseY,
@@ -83,14 +88,14 @@ export class PassButton {
                 alpha: 0.05,
                 duration: DURATION,
             });
-            // Fire callback immediately
             if (this.onPress) this.onPress();
         });
 
         this.sprite.on('pointerup', () => {
             if (!this.enabled) return;
+            this.scene.tweens.killTweensOf(this.sprite);
+            this.scene.tweens.killTweensOf(this.shadow);
             const { DURATION, EASE } = PASS_BUTTON.POP_BACK;
-            // Cosmetic pop-back
             this.scene.tweens.add({
                 targets: this.sprite,
                 y: this.raisedY,

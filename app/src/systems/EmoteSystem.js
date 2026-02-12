@@ -81,6 +81,7 @@ export class EmoteSystem {
                             this.scene.tweens.add({
                                 targets: emoteSprite,
                                 scale: 0,
+                                y: bottomY - 8,
                                 alpha: 0.5,
                                 duration: 300,
                                 ease: 'Quad.easeIn',

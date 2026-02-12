@@ -1,4 +1,4 @@
-import { ANIMATION, CARD_SCALE, DRAG_DROP } from '../config/settings.js';
+import { ANIMATION, CARD_SCALE, DRAG_DROP, PLAYABLE_GLOW } from '../config/settings.js';
 import { ASSET_DIMENSIONS } from '../config/assetDimensions.js';
 /**
  * Card entity class
@@ -14,11 +14,10 @@ export class Card extends Phaser.GameObjects.Image {
         this.value = value;
         this.isPlayer = isPlayer;
 
-        // Texture keys based on player type
-        this.cardBackKey = isPlayer ? 'card_back_player' : 'card_back';
+        // Texture keys — single texture per card (no _player duplicates)
+        this.cardBackKey = 'card_back';
         // Wild cards have no suit — their value IS the texture key (e.g. 'wild')
-        const faceKey = suit ? `${value}_${suit}` : value;
-        this.cardFaceKey = isPlayer ? `${faceKey}_player` : faceKey;
+        this.cardFaceKey = suit ? `${value}_${suit}` : value;
 
         this.isFaceUp = false;
         this.isSelected = false;
@@ -43,6 +42,17 @@ export class Card extends Phaser.GameObjects.Image {
         // Store base scale for reference (calculated from fixed display size)
         this.baseScaleX = this.scaleX;
         this.baseScaleY = this.scaleY;
+    }
+
+    /**
+     * Update card identity (suit, value, face texture key).
+     * Used when a face-down card needs to be revealed with actual data
+     * (e.g. bot cards dealt as placeholders, then played with real data).
+     */
+    updateCardData(suit, value) {
+        this.suit = suit;
+        this.value = value;
+        this.cardFaceKey = suit ? `${value}_${suit}` : value;
     }
 
     /**
@@ -297,6 +307,8 @@ export class Card extends Phaser.GameObjects.Image {
     playToCenter(targetX, targetY, rotation, callback) {
         this.isDragging = false;
         this.scene.tweens.killTweensOf(this);
+        this.removePlayableGlow();
+        this.removeDropShadow();
         this.removeInteractive();
         this.removeAllListeners();
 
@@ -326,6 +338,40 @@ export class Card extends Phaser.GameObjects.Image {
     addDropShadow(x = 1, y = 2, decay = 0.06, power = 0.8, color = 0x000000, samples = 6, intensity = 0.8) {
         if (this.preFX && !this.shadowFX) {
             this.shadowFX = this.preFX.addShadow(x, y, decay, power, color, samples, intensity);
+        }
+    }
+
+    /**
+     * Add a pulsing glow to indicate this card is playable
+     */
+    addPlayableGlow() {
+        if (this.glowFX || !this.postFX) return;
+        const cfg = PLAYABLE_GLOW;
+        this.glowFX = this.postFX.addGlow(
+            cfg.COLOR, cfg.OUTER_STRENGTH, cfg.INNER_STRENGTH,
+            cfg.KNOCKOUT, cfg.QUALITY, cfg.DISTANCE
+        );
+        // this.glowPulse = this.scene.tweens.add({
+        //     targets: this.glowFX,
+        //     outerStrength: cfg.PULSE_MAX,
+        //     duration: cfg.PULSE_DURATION,
+        //     yoyo: true,
+        //     repeat: -1,
+        //     ease: 'Sine.easeInOut',
+        // });
+    }
+
+    /**
+     * Remove the playable glow effect
+     */
+    removePlayableGlow() {
+        if (this.glowPulse) {
+            this.glowPulse.stop();
+            this.glowPulse = null;
+        }
+        if (this.glowFX && this.postFX) {
+            this.postFX.remove(this.glowFX);
+            this.glowFX = null;
         }
     }
 
@@ -371,6 +417,7 @@ export class Card extends Phaser.GameObjects.Image {
      */
     destroy() {
         this.scene.tweens.killTweensOf(this);
+        this.removePlayableGlow();
         this.removeDropShadow();
         this.removeAllListeners();
         super.destroy();

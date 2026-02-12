@@ -55,37 +55,39 @@ export class MoveExecutor {
         this.scene.scheduleTimer(delay, () => {
             if (!this.isExecuting) { onComplete(); return; }
 
-            const next = () => {
-                this._executeAtIndex(moveset, index + 1, onComplete);
-            };
+            const advance = () => this._executeAtIndex(moveset, index + 1, onComplete);
 
             switch (move.action) {
                 case 'play':
-                    this._executePlayMove(move, next);
+                    this._executePlayMove(move, null, advance);
                     break;
                 case 'draw':
-                    this._executeDrawMove(move, next);
+                    this._executeDrawMove(move, advance);
                     break;
                 default:
-                    next();
+                    advance();
             }
         });
     }
 
     /**
      * Animate a bot playing a card: lift → flip → fly to center.
+     * @param {Function} onCardLanded - fires when card reaches center
+     * @param {Function} onFullyDone  - fires after secondary animations (reverse arrow)
      * @private
      */
-    _executePlayMove(move, onComplete) {
+    _executePlayMove(move, onCardLanded, onFullyDone) {
         const player = this.scene.playerManager.getPlayer(move.playerIndex);
         if (!player || player.cards.length === 0) {
-            onComplete();
+            onCardLanded();
+            onFullyDone();
             return;
         }
 
         const card = this._findCardInHand(player, move.card);
         if (!card) {
-            onComplete();
+            onCardLanded();
+            onFullyDone();
             return;
         }
 
@@ -101,7 +103,7 @@ export class MoveExecutor {
                     card.flip(() => {
                         // 3. Fly to center
                         this.scene.scheduleTimer(BOT_TURN.FLIP_TO_FLY_DELAY, () => {
-                            this._playCardToCenter(card, player, move, onComplete);
+                            this._playCardToCenter(card, player, move, onCardLanded, onFullyDone);
                         });
                     });
                 });
@@ -111,10 +113,13 @@ export class MoveExecutor {
 
     /**
      * Remove card from hand, animate to center, apply visual effects.
+     * @param {Function} onCardLanded - fires when the card reaches center (before reverse arrow)
+     * @param {Function} onFullyDone  - fires after all secondary animations (reverse arrow etc.)
      * @private
      */
-    _playCardToCenter(card, player, move, onComplete) {
+    _playCardToCenter(card, player, move, onCardLanded, onFullyDone) {
         player.removeCard(card);
+        this.scene.triggerPlayEmotes(move.playerIndex, move.card, player.cards.length);
 
         const effect = GameLogic.getCardEffect(move.card);
 
@@ -140,29 +145,40 @@ export class MoveExecutor {
             move.card, move.chosenColor
         );
 
-        // Wait for reverse animation before proceeding to next move
+        if (onCardLanded) onCardLanded();
+
+        // Wait for reverse animation before advancing to next move
         if (effect.type === 'reverse') {
             this.scene.isClockwise = !this.scene.isClockwise;
             this.scene.directionArrow.toggle(() => {
-                onComplete();
+                if (onFullyDone) onFullyDone();
             });
         } else {
-            onComplete();
+            if (onFullyDone) onFullyDone();
         }
     }
 
     /**
      * Animate dealing cards to a player (penalty or draw/pass).
+     * Handles both local mode (drawnCards is Card[]) and API mode (drawnCards is int).
      * @private
      */
     _executeDrawMove(move, onComplete) {
         const player = this.scene.playerManager.getPlayer(move.playerIndex);
-        if (!player || !move.drawnCards || move.drawnCards.length === 0) {
+        const isCount = typeof move.drawnCards === 'number';
+        const count = isCount ? move.drawnCards : (move.drawnCards?.length || 0);
+
+        if (!player || count === 0) {
             onComplete();
             return;
         }
 
-        this._dealSpecificCards(player, move.drawnCards, onComplete);
+        // API mode: bot cards stay hidden — generate face-down placeholders
+        const cardDataArray = isCount
+            ? Array.from({ length: count }, () => ({ suit: null, value: 'back' }))
+            : move.drawnCards;
+
+        this._dealSpecificCards(player, cardDataArray, onComplete);
     }
 
     /**
@@ -257,12 +273,24 @@ export class MoveExecutor {
 
     /**
      * Find a Card entity in a player's hand matching suit+value.
+     * For face-down bot cards, picks any card and updates its identity.
      * @private
      */
     _findCardInHand(player, cardData) {
-        return player.cards.find(c =>
+        // Exact match (local player cards or cards with known data)
+        const exact = player.cards.find(c =>
             c.suit === cardData.suit && c.value === cardData.value
-        ) || null;
+        );
+        if (exact) return exact;
+
+        // Face-down card (bot): pick any and update its identity for the flip
+        const faceDown = player.cards.find(c => !c.isFaceUp);
+        if (faceDown) {
+            faceDown.updateCardData(cardData.suit, cardData.value);
+            return faceDown;
+        }
+
+        return player.cards[0] || null;
     }
 
     /**

@@ -37,9 +37,6 @@ export class CardDealer {
 
         const duration = slideDuration || ANIMATION.SLIDE_DURATION;
 
-        this.scene.sound.stopByKey('place_card_sound');
-        this.scene.sound.play('place_card_sound');
-
         card.slideTo(position.x, position.y, duration, () => {
             player.addCard(card);
             if (callback) callback(card);

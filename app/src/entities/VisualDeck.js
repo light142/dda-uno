@@ -125,6 +125,9 @@ export class VisualDeck extends Phaser.GameObjects.Container {
      * @param {Function} callback - Called when all shuffle passes complete
      */
     shuffle(callback) {
+        // Kill any in-flight tweens on stack layers from a previous shuffle/deal
+        this.stackLayers.forEach(sprite => this.scene.tweens.killTweensOf(sprite));
+
         const half = Math.floor(this.stackLayers.length / 2);
         const leftHalf = this.stackLayers.slice(0, half);
         const rightHalf = this.stackLayers.slice(half);
@@ -346,5 +349,14 @@ export class VisualDeck extends Phaser.GameObjects.Container {
      */
     getDeckPosition() {
         return { x: this.x, y: this.y };
+    }
+
+    destroy() {
+        this.stackLayers.forEach(layer => {
+            this.scene.tweens.killTweensOf(layer);
+            layer.destroy();
+        });
+        this.stackLayers = [];
+        super.destroy();
     }
 }
