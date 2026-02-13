@@ -12,4 +12,8 @@ export const ASSET_DIMENSIONS = {
     ARROW: dim(280, [1, 1]),
     PASS_BUTTON: dim(220, [400, 140]),
     UNO_BUTTON: dim(160, [400, 210]),
+    LOGO: dim(700, [900, 690]),
+    MENU_ICON: dim(75, [300, 300]),
+    MENU_BUTTON: dim(280, [400, 122]),
+    MENU_CARD: dim(90, [100, 156]),
 };

@@ -1,4 +1,4 @@
-import { loadAssets, createEmoteAnimations } from '../utils/assetLoader.js';
+import { loadGameAssets, createEmoteAnimations } from '../utils/assetLoader.js';
 import { PlayerManager } from '../systems/PlayerManager.js';
 import { CardDealer } from '../systems/CardDealer.js';
 import { VisualDeck } from '../entities/VisualDeck.js';
@@ -7,7 +7,7 @@ import { DirectionArrow } from '../entities/DirectionArrow.js';
 import { PassButton } from '../entities/PassButton.js';
 import { UnoButton } from '../entities/UnoButton.js';
 import { Card } from '../entities/Card.js';
-import { CARD_OFFSET_TO_CENTER, DRAG_DROP, ANIMATION, POWER_CARD_FX, COLOR_REPLACE, RESHUFFLE, DECK_VISUAL } from '../config/settings.js';
+import { CARD_OFFSET_TO_CENTER, DRAG_DROP, ANIMATION, POWER_CARD_FX, COLOR_REPLACE, RESHUFFLE, DECK_VISUAL, GAME_INTRO, HAMBURGER_MENU } from '../config/settings.js';
 import { GameLogic } from '../logic/GameLogic.js';
 import { MoveExecutor } from '../systems/MoveExecutor.js';
 import { StateManager } from '../systems/StateManager.js';
@@ -24,6 +24,7 @@ export class GameScene extends Phaser.Scene {
         this.idx = 0;
         this.pendingTimers = [];
         this.discardPile = [];
+        this.phantoms = [];
         this.isPlayerTurn = false;
         this.currentPlayerIndex = 0;
 
@@ -60,20 +61,552 @@ export class GameScene extends Phaser.Scene {
     }
 
     preload() {
-        loadAssets(this);
+        loadGameAssets(this);
     }
 
     create() {
         createEmoteAnimations(this);
         this.setupBackground();
         this.setupSystems();
-        this.setupDragAndDrop();
-        this.startDeal();
+        this.setupHamburgerMenu();
+        this.hideBotAvatars();
+        this.hideGameUI();
+        this.showTapToStart();
     }
 
     setupBackground() {
         this.background = this.add.image(ASSET_DIMENSIONS.BACKGROUND.WIDTH / 2, ASSET_DIMENSIONS.BACKGROUND.HEIGHT / 2, 'background');
         this.background.setDisplaySize(ASSET_DIMENSIONS.BACKGROUND.WIDTH, ASSET_DIMENSIONS.BACKGROUND.HEIGHT);
+    }
+
+    // ── Intro Sequence ──────────────────────────────────
+
+    hideBotAvatars() {
+        this.playerManager.playerAvatars.forEach((avatar, i) => {
+            if (i === 0) return; // local player stays visible
+            avatar.setAlpha(0);
+        });
+    }
+
+    hideGameUI() {
+        // Hide direction arrow — cache its target scale before hiding
+        this.directionArrow.stopIdle();
+        this._arrowTargetScaleX = this.directionArrow.sprite.scaleX;
+        this._arrowTargetScaleY = this.directionArrow.sprite.scaleY;
+        this.directionArrow.sprite.setAlpha(0);
+
+        // Hide pass button
+        this.passButton.sprite.setAlpha(0);
+        this.passButton.shadow.setAlpha(0);
+
+        // Hide uno button
+        this.unoButton.sprite.setAlpha(0);
+        this.unoButton.shadow.setAlpha(0);
+    }
+
+    showTapToStart() {
+        const cfg = GAME_INTRO.TAP_TEXT;
+        const glow = cfg.GLOW;
+        const main = cfg.MAIN;
+
+        this.tapGroup = this.add.container(cfg.X, cfg.Y);
+        this.tapGroup.setDepth(cfg.DEPTH);
+
+        // Back layer — soft neon glow halo
+        this.tapGlowText = this.add.text(0, 0, cfg.TEXT, {
+            fontSize: cfg.FONT_SIZE + 'px',
+            fontFamily: cfg.FONT_FAMILY,
+            fontStyle: 'bold',
+            color: glow.COLOR,
+            stroke: glow.STROKE,
+            strokeThickness: glow.STROKE_THICKNESS,
+            shadow: { offsetX: 0, offsetY: 0, color: glow.COLOR, blur: glow.BLUR, fill: true },
+            letterSpacing: 4,
+        });
+        this.tapGlowText.setOrigin(0.5);
+        this.tapGlowText.setAlpha(glow.ALPHA);
+        this.tapGroup.add(this.tapGlowText);
+
+        // Front layer — crisp main text
+        this.tapText = this.add.text(0, 0, cfg.TEXT, {
+            fontSize: cfg.FONT_SIZE + 'px',
+            fontFamily: cfg.FONT_FAMILY,
+            fontStyle: 'bold',
+            color: main.COLOR,
+            stroke: main.STROKE,
+            strokeThickness: main.STROKE_THICKNESS,
+            letterSpacing: 4,
+        });
+        this.tapText.setOrigin(0.5);
+        this.tapText.setAlpha(main.ALPHA);
+        this.tapGroup.add(this.tapText);
+
+        // Hint text
+        const hint = cfg.HINT_STYLE;
+        this.tapHint = this.add.text(0, hint.OFFSET_Y, cfg.HINT, {
+            fontSize: hint.FONT_SIZE + 'px',
+            fontFamily: cfg.FONT_FAMILY,
+            color: hint.COLOR,
+            letterSpacing: 3,
+        });
+        this.tapHint.setOrigin(0.5);
+        this.tapHint.setAlpha(hint.ALPHA);
+        this.tapGroup.add(this.tapHint);
+
+        // Gentle float
+        this.tweens.add({
+            targets: this.tapGroup,
+            y: cfg.Y - cfg.FLOAT.DISTANCE,
+            duration: cfg.FLOAT.DURATION,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut',
+        });
+
+        // Bouncy breathing
+        this.tweens.add({
+            targets: this.tapGroup,
+            scaleX: cfg.BOUNCE.MAX,
+            scaleY: cfg.BOUNCE.MAX,
+            duration: cfg.BOUNCE.DURATION,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut',
+        });
+
+        // Pulsing neon glow intensity
+        this.tweens.add({
+            targets: this.tapGlowText,
+            alpha: { from: cfg.GLOW_PULSE.MIN, to: cfg.GLOW_PULSE.MAX },
+            duration: cfg.GLOW_PULSE.DURATION,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut',
+        });
+
+        // Full-screen tap zone (below hamburger menu depth)
+        this.tapZone = this.add.zone(640, 360, 1280, 720);
+        this.tapZone.setDepth(cfg.DEPTH - 1);
+        this.tapZone.setInteractive();
+        this.tapZone.once('pointerdown', () => {
+            this.tapZone.destroy();
+            this.tapZone = null;
+            this.startIntroSequence();
+        });
+    }
+
+    startIntroSequence() {
+        const cfg = GAME_INTRO;
+
+        if (this.tapGroup) {
+            this.tweens.killTweensOf(this.tapGroup);
+            this.tweens.add({
+                targets: this.tapGroup,
+                alpha: 0,
+                scaleX: 1.2,
+                scaleY: 1.2,
+                duration: cfg.TAP_TEXT.FADE_OUT,
+                ease: 'Power2',
+                onComplete: () => {
+                    if (this.tapGroup) { this.tapGroup.destroy(); this.tapGroup = null; }
+                    this.tapText = null;
+                    this.tapGlowText = null;
+                    this.tapHint = null;
+                }
+            });
+        }
+
+        // Animate bot avatars in with stagger
+        const botAvatars = this.playerManager.playerAvatars.filter((_, i) => i !== 0);
+        const botCfg = cfg.BOT_ENTRANCE;
+
+        botAvatars.forEach((avatar, i) => {
+            // Start offset away from center
+            const player = avatar.player;
+            let offsetX = 0, offsetY = 0;
+            if (player.position === 'left') offsetX = -botCfg.OFFSET;
+            else if (player.position === 'right') offsetX = botCfg.OFFSET;
+            else if (player.position === 'top') offsetY = -botCfg.OFFSET;
+
+            const targetX = avatar.x;
+            const targetY = avatar.y;
+            avatar.x = targetX + offsetX;
+            avatar.y = targetY + offsetY;
+            avatar.setScale(botCfg.SCALE_FROM);
+
+            this.tweens.add({
+                targets: avatar,
+                x: targetX,
+                y: targetY,
+                alpha: 1,
+                scaleX: 1,
+                scaleY: 1,
+                duration: botCfg.DURATION,
+                delay: i * botCfg.STAGGER,
+                ease: botCfg.EASE,
+            });
+        });
+
+        const botsLandedDelay = botAvatars.length * botCfg.STAGGER + botCfg.DURATION;
+
+        // Animate direction arrow in
+        const arrowCfg = cfg.ARROW_ENTRANCE;
+        this.scheduleTimer(botsLandedDelay + arrowCfg.DELAY, () => {
+            const sprite = this.directionArrow.sprite;
+            const targetScaleX = this._arrowTargetScaleX;
+            const targetScaleY = this._arrowTargetScaleY;
+            sprite.setAngle(0);
+            sprite.setScale(0);
+            this.tweens.add({
+                targets: sprite,
+                alpha: 1,
+                scaleX: targetScaleX,
+                scaleY: targetScaleY,
+                duration: arrowCfg.DURATION,
+                ease: 'Back.easeOut',
+                onComplete: () => {
+                    this.directionArrow.startIdle();
+                }
+            });
+        });
+
+        // Animate buttons in (slide up from below)
+        const btnCfg = cfg.BUTTON_ENTRANCE;
+        const buttons = [
+            { sprite: this.passButton.sprite, shadow: this.passButton.shadow },
+            { sprite: this.unoButton.sprite, shadow: this.unoButton.shadow },
+        ];
+
+        const btnDelay = botsLandedDelay + arrowCfg.DELAY + arrowCfg.DURATION * 0.5;
+
+        buttons.forEach((btn, i) => {
+            const targetY = btn.sprite.y;
+            const shadowTargetY = btn.shadow.y;
+            btn.sprite.y = targetY + btnCfg.OFFSET_Y;
+            btn.shadow.y = shadowTargetY + btnCfg.OFFSET_Y;
+
+            this.scheduleTimer(btnDelay + i * btnCfg.STAGGER, () => {
+                this.tweens.add({
+                    targets: btn.sprite,
+                    y: targetY,
+                    alpha: 1,
+                    duration: btnCfg.DURATION,
+                    ease: btnCfg.EASE,
+                });
+                this.tweens.add({
+                    targets: btn.shadow,
+                    y: shadowTargetY,
+                    alpha: 0.8,
+                    duration: btnCfg.DURATION,
+                    ease: btnCfg.EASE,
+                });
+            });
+        });
+
+        // Start dealing after all UI is in
+        const totalIntroTime = btnDelay + buttons.length * btnCfg.STAGGER + btnCfg.DURATION + cfg.DEAL_DELAY;
+        this.scheduleTimer(totalIntroTime, () => {
+            this.setupDragAndDrop();
+            this.startDeal();
+        });
+    }
+
+    // ── Hamburger Menu ────────────────────────────────────
+
+    setupHamburgerMenu() {
+        const cfg = HAMBURGER_MENU;
+        const { WIDTH, HEIGHT } = ASSET_DIMENSIONS.MENU_ICON;
+
+        this.menuIcon = this.add.image(cfg.X, cfg.Y, 'menu_btn');
+        this.menuIcon.setDisplaySize(WIDTH, HEIGHT);
+        this.menuIcon.setDepth(cfg.DEPTH);
+        this.menuIcon.setInteractive({ useHandCursor: true });
+
+        this._menuBaseScaleX = this.menuIcon.scaleX;
+        this._menuBaseScaleY = this.menuIcon.scaleY;
+
+        this.menuIcon.on('pointerover', () => {
+            this.tweens.killTweensOf(this.menuIcon);
+            this.tweens.add({
+                targets: this.menuIcon,
+                scaleX: this._menuBaseScaleX * 1.12,
+                scaleY: this._menuBaseScaleY * 1.12,
+                duration: 150,
+                ease: 'Back.easeOut',
+            });
+        });
+
+        this.menuIcon.on('pointerout', () => {
+            this.tweens.killTweensOf(this.menuIcon);
+            this.tweens.add({
+                targets: this.menuIcon,
+                scaleX: this._menuBaseScaleX,
+                scaleY: this._menuBaseScaleY,
+                duration: 200,
+                ease: 'Sine.easeOut',
+            });
+        });
+
+        this.menuIcon.on('pointerdown', () => {
+            this.tweens.killTweensOf(this.menuIcon);
+            this.tweens.add({
+                targets: this.menuIcon,
+                scaleX: this._menuBaseScaleX * 0.88,
+                scaleY: this._menuBaseScaleY * 0.88,
+                duration: 80,
+                ease: 'Sine.easeIn',
+                onComplete: () => {
+                    this.tweens.add({
+                        targets: this.menuIcon,
+                        scaleX: this._menuBaseScaleX,
+                        scaleY: this._menuBaseScaleY,
+                        duration: 200,
+                        ease: 'Back.easeOut',
+                    });
+                },
+            });
+            this.toggleMenu();
+        });
+
+        this.menuOpen = false;
+        this.menuPanel = null;
+        this.menuItems = [];
+        this.menuCloseZone = null;
+    }
+
+    toggleMenu() {
+        if (this.menuOpen) {
+            this.closeMenu();
+        } else {
+            this.openMenu();
+        }
+    }
+
+    openMenu() {
+        if (this.menuOpen) return;
+        this.menuOpen = true;
+
+        const cfg = HAMBURGER_MENU;
+        const panelCfg = cfg.PANEL;
+        const itemCfg = cfg.ITEM;
+
+        const px = cfg.X - ASSET_DIMENSIONS.MENU_ICON.WIDTH / 2;
+        const py = cfg.Y + panelCfg.OFFSET_Y;
+
+        // Close zone (click outside to close)
+        this.menuCloseZone = this.add.zone(640, 360, 1280, 720);
+        this.menuCloseZone.setDepth(cfg.DEPTH - 1);
+        this.menuCloseZone.setInteractive();
+        this.menuCloseZone.on('pointerdown', () => this.closeMenu());
+
+        // Panel container
+        this.menuPanel = this.add.container(px, py);
+        this.menuPanel.setDepth(cfg.DEPTH);
+
+        // Background
+        const bg = this.add.graphics();
+        bg.fillStyle(panelCfg.BG_COLOR, panelCfg.BG_ALPHA);
+        bg.fillRoundedRect(0, 0, panelCfg.WIDTH, panelCfg.HEIGHT, panelCfg.CORNER_RADIUS);
+        bg.lineStyle(panelCfg.BORDER_WIDTH, panelCfg.BORDER_COLOR, panelCfg.BORDER_ALPHA);
+        bg.strokeRoundedRect(0, 0, panelCfg.WIDTH, panelCfg.HEIGHT, panelCfg.CORNER_RADIUS);
+        this.menuPanel.add(bg);
+
+        // Menu items
+        const items = [
+            { label: 'Restart', action: () => this.handleRestart() },
+            { label: 'Quit', action: () => this.handleQuit() },
+        ];
+
+        const centerX = panelCfg.WIDTH / 2;
+
+        items.forEach((item, i) => {
+            const y = itemCfg.PADDING_TOP + i * itemCfg.HEIGHT + itemCfg.HEIGHT / 2;
+            const text = this.add.text(centerX, y, item.label, {
+                fontSize: itemCfg.FONT_SIZE + 'px',
+                fontFamily: itemCfg.FONT_FAMILY,
+                fontStyle: 'bold',
+                color: itemCfg.COLOR,
+                stroke: itemCfg.STROKE,
+                strokeThickness: itemCfg.STROKE_THICKNESS,
+            });
+            text.setOrigin(0.5);
+            text.setInteractive({ useHandCursor: true });
+            text.on('pointerover', () => text.setColor(itemCfg.HOVER_COLOR));
+            text.on('pointerout', () => text.setColor(itemCfg.COLOR));
+            text.on('pointerdown', () => item.action());
+            this.menuPanel.add(text);
+            this.menuItems.push(text);
+
+            // Divider between items (not after last)
+            if (i < items.length - 1) {
+                const div = panelCfg.DIVIDER;
+                const divY = itemCfg.PADDING_TOP + (i + 1) * itemCfg.HEIGHT;
+                const divGfx = this.add.graphics();
+                divGfx.lineStyle(1, div.COLOR, div.ALPHA);
+                divGfx.lineBetween(div.INSET, divY, panelCfg.WIDTH - div.INSET, divY);
+                this.menuPanel.add(divGfx);
+            }
+        });
+
+        // Animate in
+        this.menuPanel.setScale(0.85, 0);
+        this.menuPanel.setAlpha(0);
+        this.tweens.add({
+            targets: this.menuPanel,
+            scaleX: 1,
+            scaleY: 1,
+            alpha: 1,
+            duration: panelCfg.SLIDE_DURATION,
+            ease: panelCfg.EASE,
+        });
+    }
+
+    closeMenu() {
+        if (!this.menuOpen) return;
+        this.menuOpen = false;
+
+        if (this.menuCloseZone) {
+            this.menuCloseZone.destroy();
+            this.menuCloseZone = null;
+        }
+
+        if (this.menuPanel) {
+            this.tweens.add({
+                targets: this.menuPanel,
+                scaleY: 0,
+                alpha: 0,
+                duration: 120,
+                ease: 'Power2',
+                onComplete: () => {
+                    this.menuPanel.destroy();
+                    this.menuPanel = null;
+                    this.menuItems = [];
+                }
+            });
+        }
+    }
+
+    // ── Restart / Quit ──────────────────────────────────
+
+    handleRestart() {
+        this.closeMenu();
+
+        const cfg = HAMBURGER_MENU.WIPE;
+
+        // ── Nuclear cleanup: halt ALL in-flight animations and timers ──
+        // This catches CardDealer's untracked delayedCalls, visual deck shuffles, etc.
+        this.time.removeAllEvents();
+        this.pendingTimers = [];
+        this.tweens.killAll();
+
+        // Force-clean menu panel if closeMenu's tween was killed before onComplete
+        if (this.menuPanel) { this.menuPanel.destroy(); this.menuPanel = null; this.menuItems = []; }
+
+        // Destroy any orphaned power-card phantoms (copy array since destroy listener splices it)
+        [...this.phantoms].forEach(p => p.destroy());
+        this.phantoms = [];
+
+        this.moveExecutor.cancel();
+        this.isPlayerTurn = false;
+        if (this.emoteSystem) this.emoteSystem.stopAllEmotes();
+
+        // Clean up tap-to-start if still showing
+        if (this.tapGroup) { this.tapGroup.destroy(); this.tapGroup = null; }
+        this.tapText = null;
+        this.tapGlowText = null;
+        this.tapHint = null;
+        if (this.tapZone) { this.tapZone.destroy(); this.tapZone = null; }
+
+        // Clear player hand arrays first (so clearCards doesn't double-destroy)
+        this.playerManager.getAllPlayers().forEach(player => { player.cards = []; });
+        this.discardPile = [];
+
+        // Now destroy ALL Card objects in the scene (including mid-flight ones)
+        const allCards = this.children.list.filter(child => child instanceof Card);
+        allCards.forEach(card => card.destroy());
+
+        // Collect non-card objects to wipe
+        const targets = [];
+
+        this.playerManager.playerAvatars.forEach((avatar, i) => {
+            if (i !== 0) targets.push(avatar);
+        });
+        targets.push(this.directionArrow.sprite);
+        targets.push(this.passButton.sprite, this.passButton.shadow);
+        targets.push(this.unoButton.sprite, this.unoButton.shadow);
+
+        // Wipe remaining UI out
+        this.tweens.add({
+            targets,
+            alpha: 0,
+            scaleX: '*=0.7',
+            scaleY: '*=0.7',
+            duration: cfg.DURATION,
+            ease: cfg.EASE,
+            onComplete: () => this._finishRestart(),
+        });
+    }
+
+    _finishRestart() {
+        // Reset buttons
+        this.passButton.disable();
+        this.passButton.sprite.setScale(this.passButton.baseScaleX, this.passButton.baseScaleY);
+        this.passButton.sprite.setAlpha(0);
+        this.passButton.shadow.setAlpha(0);
+        this.passButton.shadow.setScale(this.passButton.baseScaleX, this.passButton.baseScaleY);
+        this.passButton.sprite.y = this.passButton.raisedY;
+        this.passButton.shadow.y = this.passButton.baseY;
+
+        this.unoButton.disable();
+        this.unoButton.sprite.setScale(this.unoButton.baseScaleX, this.unoButton.baseScaleY);
+        this.unoButton.sprite.setAlpha(0);
+        this.unoButton.shadow.setAlpha(0);
+        this.unoButton.shadow.setScale(this.unoButton.baseScaleX, this.unoButton.baseScaleY);
+        this.unoButton.sprite.y = this.unoButton.raisedY;
+        this.unoButton.shadow.y = this.unoButton.baseY;
+
+        // Reset arrow
+        this.directionArrow.sprite.setAlpha(0);
+        this.directionArrow.sprite.setScale(this._arrowTargetScaleX, this._arrowTargetScaleY);
+        this.directionArrow.sprite.setAngle(0);
+
+        // Reset bot avatars
+        this.playerManager.playerAvatars.forEach((avatar, i) => {
+            if (i !== 0) {
+                avatar.setAlpha(0);
+                avatar.setScale(1);
+                avatar.x = avatar.player.x;
+                avatar.y = avatar.player.y;
+            }
+        });
+
+        // Reset visual deck
+        this.visualDeck.reset();
+
+        // Reset game state
+        this.topCard = null;
+        this.activeColor = null;
+        this.isClockwise = true;
+        this.isR = true;
+
+        // Remove drag listeners and re-add on next intro
+        this.input.off('dragstart');
+        this.input.off('drag');
+        this.input.off('dragend');
+
+        // Show tap to start again
+        this.showTapToStart();
+    }
+
+    handleQuit() {
+        this.closeMenu();
+        this.time.removeAllEvents();
+        this.pendingTimers = [];
+        this.tweens.killAll();
+        if (this.menuPanel) { this.menuPanel.destroy(); this.menuPanel = null; this.menuItems = []; }
+        this.moveExecutor.cancel();
+        if (this.emoteSystem) this.emoteSystem.stopAllEmotes();
+        this.scene.start('MainMenuScene');
     }
 
     setupSystems() {
@@ -879,6 +1412,11 @@ export class GameScene extends Phaser.Scene {
         p.setDepth(card.depth + 1);
         p.setAlpha(0.8);
         if (tint != null) p.setTint(tint);
+        this.phantoms.push(p);
+        p.once('destroy', () => {
+            const idx = this.phantoms.indexOf(p);
+            if (idx !== -1) this.phantoms.splice(idx, 1);
+        });
         return p;
     }
 

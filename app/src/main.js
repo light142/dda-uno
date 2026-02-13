@@ -1,3 +1,4 @@
+import { MainMenuScene } from './scenes/MainMenuScene.js';
 import { GameScene } from './scenes/GameScene.js';
 
 const config = {
@@ -9,8 +10,10 @@ const config = {
     height: 720,
     backgroundColor: '#000000',
     pixelArt: false,
+    dom: { createContainer: true },
     scene: [
-        GameScene
+        MainMenuScene,
+        GameScene,
     ],
     scale: {
         mode: Phaser.Scale.FIT,

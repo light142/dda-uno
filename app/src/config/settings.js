@@ -307,6 +307,61 @@ export const COLOR_REPLACE = {
     },
 };
 
+export const MAIN_MENU = {
+    LOGO: {
+        X: 640,
+        Y: 280,
+        FLOAT: {
+            DISTANCE: 0,
+            DURATION: 1800,
+            EASE: 'Sine.easeInOut',
+        },
+    },
+    BUTTONS: {
+        Y: 590,
+        SCALE: 1,
+        SPACING: 320,
+        HOVER: {
+            SCALE: 1.08,
+            DURATION: 120,
+            EASE: 'Sine.easeOut',
+        },
+        PRESS: {
+            SCALE: 0.95,
+        },
+    },
+    FLOATING_CARDS: {
+        COUNT: 6,
+        DEPTH: 1,
+        ALPHA: { MIN: 0.6, MAX: 0.6 },
+        MIN_DISTANCE: 130,
+        DRIFT: {
+            RANGE: 40,
+            DURATION: { MIN: 4000, MAX: 7000 },
+            EASE: 'Sine.easeInOut',
+        },
+        SPIN: { MIN: -8, MAX: 8 },
+        ZONES: [
+            { x: 30,  y: 100, w: 280, h: 440 },   // left side
+            { x: 970, y: 100, w: 280, h: 440 },   // right side
+            { x: 280, y: 30,  w: 100, h: 100 },   // top bar
+            { x: 940, y: 30,  w: 100, h: 100 },   // right top bar
+        ],
+    },
+    FORM: {
+        OVERLAY_ALPHA: 0.4,
+        ANIM: {
+            MENU_OUT_DURATION: 400,
+            MENU_OUT_OFFSET: 60,
+            FORM_IN_DURATION: 400,
+            FORM_OUT_DURATION: 250,
+            MENU_IN_DURATION: 400,
+            MENU_IN_OFFSET: 40,
+            STAGGER: 60,
+        },
+    },
+};
+
 export const DRAG_DROP = {
     PLAY_ZONE: { X: 640, Y: 335, RADIUS: 150 },
     PLAY_ZONE_VISUAL: {
@@ -355,5 +410,97 @@ export const EMOTE_DISPLAY = {
     },
     FRAME_RATE: 6,
     DEPTH: 50
+};
+
+export const GAME_INTRO = {
+    TAP_TEXT: {
+        TEXT: 'Tap to Play',
+        HINT: '',
+        X: 640,
+        Y: 280,
+        FONT_SIZE: 42,
+        FONT_FAMILY: 'Nunito, Arial',
+        // Neon glow layers (back to front)
+        GLOW: {
+            COLOR: '#82F1ED',
+            STROKE: '#82F1ED',
+            STROKE_THICKNESS: 12,
+            BLUR: 24,
+            ALPHA: 0.25,
+        },
+        MAIN: {
+            COLOR: '#E7FDF9',
+            STROKE: '#82F1ED',
+            STROKE_THICKNESS: 4,
+            ALPHA: 0.92,
+        },
+        DEPTH: 20,
+        HINT_STYLE: {
+            FONT_SIZE: 13,
+            COLOR: '#FFD700',
+            ALPHA: 0.3,
+            OFFSET_Y: 34,
+        },
+        FLOAT: { DISTANCE: 8, DURATION: 2200 },
+        BOUNCE: { MAX: 1.07, DURATION: 1400 },
+        GLOW_PULSE: { MIN: 0.15, MAX: 0.35, DURATION: 1800 },
+        FADE_OUT: 180,
+    },
+    BOT_ENTRANCE: {
+        OFFSET: 120,
+        DURATION: 450,
+        STAGGER: 200,
+        EASE: 'Back.easeOut',
+        SCALE_FROM: 0.6,
+    },
+    ARROW_ENTRANCE: {
+        DURATION: 400,
+        DELAY: 100,
+    },
+    BUTTON_ENTRANCE: {
+        OFFSET_Y: 80,
+        DURATION: 350,
+        STAGGER: 120,
+        EASE: 'Back.easeOut',
+    },
+    DEAL_DELAY: 300,
+};
+
+export const HAMBURGER_MENU = {
+    X: 75,
+    Y: 60,
+    DEPTH: 120,
+    PANEL: {
+        WIDTH: 200,
+        HEIGHT: 182,
+        OFFSET_Y: 40,
+        CORNER_RADIUS: 12,
+        BG_COLOR: 0x0d0820,
+        BG_ALPHA: 0.94,
+        BORDER_COLOR: 0x82F1ED,
+        BORDER_ALPHA: 0.25,
+        BORDER_WIDTH: 1.5,
+        SLIDE_DURATION: 180,
+        EASE: 'Back.easeOut',
+        DIVIDER: {
+            COLOR: 0x82F1ED,
+            ALPHA: 0.15,
+            INSET: 16,
+        },
+    },
+    ITEM: {
+        FONT_SIZE: 26,
+        FONT_FAMILY: 'Nunito, Arial',
+        COLOR: '#E7FDF9',
+        HOVER_COLOR: '#82F1ED',
+        STROKE: '#000000',
+        STROKE_THICKNESS: 1,
+        HEIGHT: 80,
+        PADDING_TOP: 11,
+    },
+    WIPE: {
+        DURATION: 400,
+        EASE: 'Power2',
+    },
 };
 

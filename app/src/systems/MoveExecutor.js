@@ -79,15 +79,15 @@ export class MoveExecutor {
     _executePlayMove(move, onCardLanded, onFullyDone) {
         const player = this.scene.playerManager.getPlayer(move.playerIndex);
         if (!player || player.cards.length === 0) {
-            onCardLanded();
-            onFullyDone();
+            if (onCardLanded) onCardLanded();
+            if (onFullyDone) onFullyDone();
             return;
         }
 
         const card = this._findCardInHand(player, move.card);
         if (!card) {
-            onCardLanded();
-            onFullyDone();
+            if (onCardLanded) onCardLanded();
+            if (onFullyDone) onFullyDone();
             return;
         }
 

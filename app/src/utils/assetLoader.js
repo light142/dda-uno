@@ -1,6 +1,6 @@
 import { COLORS, NUMBER_VALUES, ACTION_VALUES, WILD_CARDS, COLOR_INITIALS, ACTION_FILE_CODES, WILD_FILE_CODES } from '../config/constants.js';
 
-export function loadAssets(scene) {
+export function loadGameAssets(scene) {
 
     scene.load.image('background', 'assets/images/background/bg.png');
 
@@ -10,6 +10,7 @@ export function loadAssets(scene) {
     scene.load.image('pass_btn', 'assets/images/buttons/pass.png');
     scene.load.image('pass_disabled_btn', 'assets/images/buttons/pass-disabled.png');
     scene.load.image('uno_btn', 'assets/images/buttons/uno.png');
+    scene.load.image('menu_btn', 'assets/images/buttons/menu.png');
 
     scene.load.spritesheet('emote_uno', 'assets/images/emotes/uno-emote.png', { frameWidth: 180, frameHeight: 180 });
     scene.load.spritesheet('emote_gg', 'assets/images/emotes/gg-emote.png', { frameWidth: 180, frameHeight: 180 });
@@ -84,6 +85,7 @@ const EMOTE_ANIMS = [
     { key: 'cry', frames: 36, frameRate: 13, repeat: 0 },
     { key: 'sad', frames: 36, frameRate: 13, repeat: 0 },
     { key: 'greet', frames: 36, frameRate: 9, repeat: 0 },
+    { key: 'logo', frames: 36, frameRate: 9, repeat: 0 },
 ];
 
 /**
@@ -101,4 +103,36 @@ export function createEmoteAnimations(scene) {
             });
         }
     });
+}
+
+// Card textures used as decorative floaters on the main menu
+export const MENU_CARD_KEYS = [
+    '9_yellow',
+    'plus2_red', 'block_blue', 'reverse_green',
+    'wild', 'plus4',
+];
+
+export function loadMainScreenAssets(scene) {
+    scene.load.image('main_bg', 'assets/images/background/bg-main.png');
+
+    scene.load.image('logo', 'assets/images/background/logo.png');
+    scene.load.image('login_button', 'assets/images/buttons/login-button.png');
+    scene.load.image('new_user_button', 'assets/images/buttons/new-user-button.png');
+
+    scene.load.spritesheet('emote_logo', 'assets/images/background/logo-sprite.png', { frameWidth: 240, frameHeight: 180 });
+
+    // Decorative card faces
+    const numberCards = { '7_red': 'red/7', '9_yellow': 'yellow/9' };
+    const specialCards = { 'plus2_red': 'rp2', 'block_blue': 'bb', 'reverse_green': 'gr' };
+    const wildCards = { 'wild': 'w', 'plus4': 'p4' };
+
+    for (const [key, path] of Object.entries(numberCards)) {
+        scene.load.image(key, `assets/images/cards/numbers/${path}.png`);
+    }
+    for (const [key, code] of Object.entries(specialCards)) {
+        scene.load.image(key, `assets/images/cards/special/${code}.png`);
+    }
+    for (const [key, code] of Object.entries(wildCards)) {
+        scene.load.image(key, `assets/images/cards/special/${code}.png`);
+    }
 }

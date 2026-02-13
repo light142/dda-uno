@@ -289,11 +289,18 @@ export class VisualDeck extends Phaser.GameObjects.Container {
      * Called when a new deal starts
      */
     reset() {
-        // Reset all layers to visible
-        this.stackLayers.forEach(layer => {
+        this.stackLayers.forEach((layer, i) => {
+            this.scene.tweens.killTweensOf(layer);
+            // Restore original position/rotation/scale from create()
+            layer.x = i * DECK_VISUAL.LAYER_OFFSET_X;
+            layer.y = -i * DECK_VISUAL.LAYER_OFFSET_Y;
+            layer.setRotation(0);
+            layer.setDisplaySize(ASSET_DIMENSIONS.CARD_DECK.WIDTH, ASSET_DIMENSIONS.CARD_DECK.HEIGHT);
             layer.setAlpha(1);
             layer.setVisible(true);
         });
+        // Restore rendering order
+        this.stackLayers.forEach(sprite => this.bringToTop(sprite));
         // Sync visual counter with actual deck
         if (this.scene.deckTotal) {
             this.visualRemaining = this.scene.deckTotal;

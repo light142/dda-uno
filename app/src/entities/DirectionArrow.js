@@ -61,6 +61,7 @@ export class DirectionArrow {
      * Instantly set direction without animation (for state restoration).
      */
     setDirection(isClockwise) {
+        if (this.isClockwise === isClockwise) return;
         this.stopIdle();
 
         this.isClockwise = isClockwise;
