@@ -414,13 +414,29 @@ export class GameScene extends Phaser.Scene {
         // Menu items
         const items = [
             { label: 'Restart', action: () => this.handleRestart() },
-            { label: 'Quit', action: () => this.handleQuit() },
+            { label: 'Logout', action: () => this.handleLogout() },
         ];
 
         const centerX = panelCfg.WIDTH / 2;
 
         items.forEach((item, i) => {
             const y = itemCfg.PADDING_TOP + i * itemCfg.HEIGHT + itemCfg.HEIGHT / 2;
+
+            // ── 1. Create invisible background rectangle (the hit area) ─────────────
+            const bg = this.add.rectangle(
+                centerX, 
+                y, 
+                panelCfg.WIDTH - 20,          // ← make it almost as wide as panel
+                itemCfg.HEIGHT - 4,           // ← almost full item height
+                0xffffff, 0                   // transparent
+            );
+            
+            bg.setOrigin(0.5);
+            
+            // Make the **rectangle** interactive (much bigger hit area)
+            bg.setInteractive({ useHandCursor: true })
+            .on('pointerdown', () => item.action());
+
             const text = this.add.text(centerX, y, item.label, {
                 fontSize: itemCfg.FONT_SIZE + 'px',
                 fontFamily: itemCfg.FONT_FAMILY,
@@ -429,11 +445,14 @@ export class GameScene extends Phaser.Scene {
                 stroke: itemCfg.STROKE,
                 strokeThickness: itemCfg.STROKE_THICKNESS,
             });
-            text.setOrigin(0.5);
+            text.setOrigin(0.5);    
             text.setInteractive({ useHandCursor: true });
             text.on('pointerover', () => text.setColor(itemCfg.HOVER_COLOR));
             text.on('pointerout', () => text.setColor(itemCfg.COLOR));
+            bg.on('pointerover', () => text.setColor(itemCfg.HOVER_COLOR));
+            bg.on('pointerout', () => text.setColor(itemCfg.COLOR));
             text.on('pointerdown', () => item.action());
+            this.menuPanel.add(bg);
             this.menuPanel.add(text);
             this.menuItems.push(text);
 
@@ -486,7 +505,7 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
-    // ── Restart / Quit ──────────────────────────────────
+    // ── Restart / Logout ──────────────────────────────────
 
     handleRestart() {
         this.closeMenu();
@@ -598,7 +617,7 @@ export class GameScene extends Phaser.Scene {
         this.showTapToStart();
     }
 
-    handleQuit() {
+    handleLogout() {
         this.closeMenu();
         this.time.removeAllEvents();
         this.pendingTimers = [];
