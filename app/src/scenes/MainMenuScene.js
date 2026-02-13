@@ -139,9 +139,9 @@ const FORM_CSS = `
 
 `;
 
-const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-    || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
-
+// const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+//     || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
+const isMobile = true;
 export class MainMenuScene extends Phaser.Scene {
     constructor() {
         super('MainMenuScene');
