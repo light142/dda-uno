@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(powershell -Command \"Select-String -Path ''c:\\\\Light\\\\AIS\\\\COMP903\\\\src\\\\ada-uno\\\\app\\\\phaser.js'' -Pattern ''Phaser v'' -List | Select-Object -First 1 | ForEach-Object { $_Line.Substring\\(0, [Math]::Min\\(200, $_Line.Length\\)\\) }\")"
+      "Bash(powershell -Command \"Select-String -Path ''c:\\\\Light\\\\AIS\\\\COMP903\\\\src\\\\ada-uno\\\\app\\\\phaser.js'' -Pattern ''Phaser v'' -List | Select-Object -First 1 | ForEach-Object { $_Line.Substring\\(0, [Math]::Min\\(200, $_Line.Length\\)\\) }\")",
+      "Bash(ls:*)"
     ]
   }
 }

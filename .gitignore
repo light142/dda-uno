@@ -49,3 +49,5 @@ pip-delete-this-directory.txt
 htmlcov/
 .coverage
 .coverage.*
+
+.claude/
