@@ -7,7 +7,7 @@ import { DirectionArrow } from '../entities/DirectionArrow.js';
 import { PassButton } from '../entities/PassButton.js';
 import { UnoButton } from '../entities/UnoButton.js';
 import { Card } from '../entities/Card.js';
-import { CARD_OFFSET_TO_CENTER, DRAG_DROP, ANIMATION, POWER_CARD_FX, COLOR_REPLACE } from '../config/settings.js';
+import { CARD_OFFSET_TO_CENTER, DRAG_DROP, ANIMATION, POWER_CARD_FX, COLOR_REPLACE, RESHUFFLE, DECK_VISUAL } from '../config/settings.js';
 import { GameLogic } from '../logic/GameLogic.js';
 import { MoveExecutor } from '../systems/MoveExecutor.js';
 import { StateManager } from '../systems/StateManager.js';
@@ -532,13 +532,21 @@ export class GameScene extends Phaser.Scene {
                     return;
                 }
 
-                this.scheduleTimer(400, () => {
-                    this.moveExecutor.executeMoves(botTurns, () => {
-                        this.syncState();
-                        this._checkBotWin(result);
-                        this.enablePlayerTurn();
+                const continueWithBotTurns = () => {
+                    this.scheduleTimer(400, () => {
+                        this.moveExecutor.executeMoves(botTurns, () => {
+                            this.syncState();
+                            this._checkBotWin(result);
+                            this.enablePlayerTurn();
+                        });
                     });
-                });
+                };
+
+                if (result.reshuffled) {
+                    this._animateReshuffle(result.deckCountAfterReshuffle).then(continueWithBotTurns);
+                } else {
+                    continueWithBotTurns();
+                }
             };
 
             if (effect.type === 'reverse') {
@@ -774,13 +782,26 @@ export class GameScene extends Phaser.Scene {
             card.flip(() => {
                 card.makeInteractive();
                 this.refanCards(localPlayer);
-                this.scheduleTimer(300, () => {
-                    this.moveExecutor.executeMoves(botTurns, () => {
-                        this.syncState();
-                        this._checkBotWin(result);
-                        this.enablePlayerTurn();
+
+                const proceedToBotTurns = () => {
+                    this.scheduleTimer(300, () => {
+                        this.moveExecutor.executeMoves(botTurns, () => {
+                            this.syncState();
+                            this._checkBotWin(result);
+                            this.enablePlayerTurn();
+                        });
                     });
-                });
+                };
+
+                // Reshuffle animation plays after the draw that emptied the deck
+                if (result.reshuffled) {
+                    this.scheduleTimer(200, () => {
+                        this._animateReshuffle(result.deckCountAfterReshuffle)
+                            .then(proceedToBotTurns);
+                    });
+                } else {
+                    proceedToBotTurns();
+                }
             });
         }, { depth: cardDepth, slideDuration: ANIMATION.PENALTY_SLIDE_DURATION });
     }
@@ -967,32 +988,195 @@ export class GameScene extends Phaser.Scene {
     }
 
     /**
-     * Cross-fade the discard pile card to the colored wild variant.
+     * Cross-fade the discard pile card to the colored wild variant
+     * with a high-frequency Matrix-style shake.
      */
     _animateColorReplacement(card, cardValue, chosenColor) {
         return new Promise((resolve) => {
-            const textureKey = `${cardValue}_${chosenColor}`;
+            this.scheduleTimer(COLOR_REPLACE.START_DELAY, () => {
+                const textureKey = `${cardValue}_${chosenColor}`;
+                const cfg = COLOR_REPLACE.SHAKE;
+                const duration = COLOR_REPLACE.FADE_DURATION;
 
-            // Place colored version on top, fade it in
-            const overlay = this.add.image(card.x, card.y, textureKey);
-            overlay.setDisplaySize(card.displayWidth, card.displayHeight);
-            overlay.setRotation(card.rotation);
-            overlay.setDepth(card.depth + 0.5);
-            overlay.setAlpha(0);
+                const originX = card.x;
+                const originY = card.y;
 
-            this.tweens.add({
-                targets: overlay,
-                alpha: 1,
-                duration: COLOR_REPLACE.FADE_DURATION,
-                ease: 'Sine.easeInOut',
-                onComplete: () => {
-                    card.setTexture(textureKey);
-                    card.cardFaceKey = textureKey;
-                    overlay.destroy();
-                    resolve();
-                }
+                // Place colored version on top, fade it in
+                const overlay = this.add.image(card.x, card.y, textureKey);
+                overlay.setDisplaySize(card.displayWidth, card.displayHeight);
+                overlay.setRotation(card.rotation);
+                overlay.setDepth(card.depth + 0.5);
+                overlay.setAlpha(0);
+
+                // High-frequency jitter — rapid random offsets like Agent Smith
+                const startTime = this.time.now;
+                const shakeTimer = this.time.addEvent({
+                    delay: cfg.INTERVAL,
+                    loop: true,
+                    callback: () => {
+                        const elapsed = this.time.now - startTime;
+                        const progress = Math.min(elapsed / duration, 1);
+
+                        // Ramp intensity up then down for a smooth envelope
+                        let envelope = 1;
+                        if (progress < cfg.RAMP_IN) {
+                            envelope = progress / cfg.RAMP_IN;
+                        } else if (progress > 1 - cfg.RAMP_OUT) {
+                            envelope = (1 - progress) / cfg.RAMP_OUT;
+                        }
+
+                        const intensity = cfg.INTENSITY * envelope;
+                        const dx = (Math.random() - 0.5) * 2 * intensity;
+                        const dy = (Math.random() - 0.5) * 2 * intensity;
+
+                        card.x = originX + dx;
+                        card.y = originY + dy;
+                        overlay.x = originX + dx;
+                        overlay.y = originY + dy;
+                    },
+                });
+
+                this.tweens.add({
+                    targets: overlay,
+                    alpha: 1,
+                    duration,
+                    ease: 'Sine.easeInOut',
+                    onComplete: () => {
+                        shakeTimer.destroy();
+                        card.x = originX;
+                        card.y = originY;
+                        card.setTexture(textureKey);
+                        card.cardFaceKey = textureKey;
+                        overlay.destroy();
+                        resolve();
+                    }
+                });
             });
         });
+    }
+
+    // ── Deck Reshuffle ────────────────────────────────────
+
+    /**
+     * Animate the discard pile being reshuffled into the draw pile.
+     * The top discard card stays in place; all others fly to the deck.
+     */
+    _animateReshuffle(deckCountAfterReshuffle) {
+        return new Promise(resolve => {
+            const zone = DRAG_DROP.PLAY_ZONE;
+            const deckPos = this.visualDeck.getDeckPosition();
+            const cfg = RESHUFFLE;
+
+            // Keep the top discard card; gather the rest
+            const topDiscardCard = this.discardPile[this.discardPile.length - 1];
+            const recyclableCards = this.discardPile.slice(0, -1);
+            this.discardPile = topDiscardCard ? [topDiscardCard] : [];
+
+            if (recyclableCards.length === 0) {
+                this._replenishVisualDeck(deckCountAfterReshuffle);
+                this.visualDeck.shuffle(() => resolve());
+                return;
+            }
+
+            // Phase 1: Gather discard cards toward center and shrink
+            let gathered = 0;
+            recyclableCards.forEach((card, i) => {
+                this.tweens.add({
+                    targets: card,
+                    x: zone.X,
+                    y: zone.Y,
+                    scaleX: card.scaleX * 0.3,
+                    scaleY: card.scaleY * 0.3,
+                    alpha: 0.4,
+                    rotation: 0,
+                    duration: cfg.GATHER_DURATION,
+                    delay: Math.min(i, 8) * cfg.GATHER_STAGGER,
+                    ease: 'Power3',
+                    onComplete: () => {
+                        card.destroy();
+                        gathered++;
+                        if (gathered >= recyclableCards.length) {
+                            // Phase 2: Fly card-backs from discard to deck
+                            this._flyCardsToDeck(zone, deckPos, cfg, () => {
+                                this._replenishVisualDeck(deckCountAfterReshuffle);
+                                // Phase 3: Shuffle animation
+                                this.visualDeck.shuffle(() => resolve());
+                            });
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    /**
+     * Create card-back sprites that arc from the discard pile to the deck.
+     * @private
+     */
+    _flyCardsToDeck(fromZone, deckPos, cfg, callback) {
+        let completed = 0;
+        const startX = fromZone.X;
+        const startY = fromZone.Y;
+        const endX = deckPos.x;
+        const endY = deckPos.y;
+
+        for (let i = 0; i < cfg.FLY_COUNT; i++) {
+            const card = this.add.image(startX, startY, 'card_back_deck');
+            card.setDisplaySize(
+                ASSET_DIMENSIONS.CARD_DECK.WIDTH,
+                ASSET_DIMENSIONS.CARD_DECK.HEIGHT
+            );
+            card.setDepth(10 + i);
+            card.setAlpha(0.9);
+
+            const startRot = Phaser.Math.FloatBetween(-0.3, 0.3);
+            card.setRotation(startRot);
+
+            // Rotation tween
+            this.tweens.add({
+                targets: card,
+                rotation: 0,
+                duration: cfg.FLY_DURATION,
+                delay: i * cfg.FLY_STAGGER,
+                ease: 'Sine.easeInOut',
+            });
+
+            // Position tween with arc
+            const tweenObj = { t: 0 };
+            this.tweens.add({
+                targets: tweenObj,
+                t: 1,
+                duration: cfg.FLY_DURATION,
+                delay: i * cfg.FLY_STAGGER,
+                ease: 'Sine.easeInOut',
+                onUpdate: () => {
+                    const p = tweenObj.t;
+                    card.x = Phaser.Math.Linear(startX, endX, p);
+                    card.y = Phaser.Math.Linear(startY, endY, p)
+                        - Math.sin(p * Math.PI) * cfg.ARC_HEIGHT;
+                },
+                onComplete: () => {
+                    card.destroy();
+                    completed++;
+                    if (completed >= cfg.FLY_COUNT) {
+                        this.scheduleTimer(cfg.PAUSE_BEFORE_SHUFFLE, callback);
+                    }
+                }
+            });
+        }
+    }
+
+    /**
+     * Replenish the visual deck after a reshuffle.
+     * @param {number} deckCount - actual number of cards now in the deck
+     * @private
+     */
+    _replenishVisualDeck(deckCount) {
+        this.visualDeck.stackLayers.forEach(layer => {
+            layer.setAlpha(1);
+        });
+        this.visualDeck.visualRemaining = deckCount || DECK_VISUAL.STACK_LAYERS;
+        this.visualDeck.updateLayers(this.visualDeck.visualRemaining, this.deckTotal);
     }
 
     // ── Helpers ──────────────────────────────────────────

@@ -67,6 +67,16 @@ export const SHUFFLE = {
     BOUNCE_DURATION: 120,
 };
 
+export const RESHUFFLE = {
+    GATHER_DURATION: 250,
+    GATHER_STAGGER: 25,
+    FLY_COUNT: 5,
+    FLY_DURATION: 400,
+    FLY_STAGGER: 50,
+    ARC_HEIGHT: 80,
+    PAUSE_BEFORE_SHUFFLE: 100,
+};
+
 export const DECK_VISUAL = {
     ROTATION: 0,
     STACK_LAYERS: 20,
@@ -287,7 +297,14 @@ export const COLOR_PICKER = {
 
 export const COLOR_REPLACE = {
     FADE_DURATION: 350,
-    BOT_DELAY: 500,
+    START_DELAY: 500,        // ms to wait before the shake + crossfade begins
+    BOT_DELAY: 100,
+    SHAKE: {
+        INTENSITY: 3,        // max pixel offset per axis
+        INTERVAL: 16,        // ms between jitter frames (~60 fps)
+        RAMP_IN: 0.15,       // fraction of duration to ramp up intensity
+        RAMP_OUT: 0.15,      // fraction of duration to ramp down at end
+    },
 };
 
 export const DRAG_DROP = {

@@ -36,6 +36,8 @@ export class LocalGameSimulator {
         this.playerCount = 4;
         this.discardPile = [];
         this.gameId = null;
+        this._reshuffledThisTurn = false;
+        this._deckCountAfterReshuffle = 0;
     }
 
     // ── Server Simulation ────────────────────────────────
@@ -113,6 +115,8 @@ export class LocalGameSimulator {
      */
     async playerPlay(cardData, chosenColor) {
         await this._simulateServer();
+        this._reshuffledThisTurn = false;
+        this._deckCountAfterReshuffle = 0;
 
         // Forced rejection scenario
         if (LocalGameSimulator.SCENARIOS.FORCE_INVALID_PLAY) {
@@ -149,6 +153,7 @@ export class LocalGameSimulator {
                 isClockwise: this.isClockwise,
                 deckRemaining: this.deck.remaining(),
                 winner: 0,
+                reshuffled: false,
             };
         }
 
@@ -164,6 +169,8 @@ export class LocalGameSimulator {
             isClockwise: this.isClockwise,
             deckRemaining: this.deck.remaining(),
             winner,
+            reshuffled: this._reshuffledThisTurn,
+            deckCountAfterReshuffle: this._deckCountAfterReshuffle,
         };
     }
 
@@ -173,10 +180,17 @@ export class LocalGameSimulator {
      */
     async playerPass() {
         await this._simulateServer();
+        this._reshuffledThisTurn = false;
+        this._deckCountAfterReshuffle = 0;
 
         const drawnCard = this.deck.draw();
         if (drawnCard) {
             this.hands[0].push({ ...drawnCard });
+        }
+
+        // Reshuffle immediately when draw pile becomes empty
+        if (this.deck.remaining() === 0) {
+            this._reshuffleDiscardIntoDeck();
         }
 
         const nextIndex = GameLogic.getNextPlayerIndex(0, this.isClockwise);
@@ -191,6 +205,8 @@ export class LocalGameSimulator {
             isClockwise: this.isClockwise,
             deckRemaining: this.deck.remaining(),
             winner,
+            reshuffled: this._reshuffledThisTurn,
+            deckCountAfterReshuffle: this._deckCountAfterReshuffle,
         };
     }
 
@@ -390,14 +406,44 @@ export class LocalGameSimulator {
 
     // ── Private: Deck & Hand Helpers ────────────────────
 
-    /** @private Draw N cards from the deck */
+    /** @private Draw N cards from the deck, reshuffling discard pile when it empties */
     _drawCards(count) {
         const cards = [];
         for (let i = 0; i < count; i++) {
+            if (this.deck.remaining() === 0 && !this._reshuffleDiscardIntoDeck()) {
+                break; // Deck and discard both exhausted
+            }
             const card = this.deck.draw();
-            if (card) cards.push(card);
+            if (card) {
+                cards.push(card);
+                // Reshuffle immediately when draw pile becomes empty
+                if (this.deck.remaining() === 0) {
+                    this._reshuffleDiscardIntoDeck();
+                }
+            }
         }
         return cards;
+    }
+
+    /**
+     * Reshuffle the discard pile into the deck.
+     * Keeps the top discard card in place as the new discard pile.
+     * @private
+     * @returns {boolean} true if reshuffled, false if not enough cards
+     */
+    _reshuffleDiscardIntoDeck() {
+        if (this.discardPile.length <= 1) return false;
+
+        const topCard = this.discardPile[this.discardPile.length - 1];
+        const cardsForDeck = this.discardPile.slice(0, -1);
+
+        this.deck.cards.push(...cardsForDeck);
+        this.discardPile = [topCard];
+        this.deck.shuffle();
+
+        this._reshuffledThisTurn = true;
+        this._deckCountAfterReshuffle = this.deck.remaining();
+        return true;
     }
 
     /** @private Remove a specific card from a player's hand */
