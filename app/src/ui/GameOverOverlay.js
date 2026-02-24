@@ -380,32 +380,11 @@ export class GameOverOverlay {
         btnText.setOrigin(0.5);
         controlGroup.add(btnText);
 
-        const hitZone = scene.add.zone(0, 0, btnCfg.WIDTH + 20, btnCfg.HEIGHT + 10);
-        hitZone.setOrigin(0.5);
-        hitZone.setInteractive({ useHandCursor: true });
-        controlGroup.add(hitZone);
-
-        hitZone.on('pointerover', () => {
-            scene.tweens.killTweensOf(controlGroup);
-            scene.tweens.add({
-                targets: controlGroup,
-                scaleX: btnCfg.HOVER_SCALE,
-                scaleY: btnCfg.HOVER_SCALE,
-                duration: 120,
-                ease: 'Back.easeOut',
-            });
-        });
-
-        hitZone.on('pointerout', () => {
-            scene.tweens.killTweensOf(controlGroup);
-            scene.tweens.add({
-                targets: controlGroup,
-                scaleX: 1,
-                scaleY: 1,
-                duration: 150,
-                ease: 'Sine.easeOut',
-            });
-        });
+        // Full-screen touch zone (same pattern as tap-to-play) for reliable iOS touch
+        const hitZone = scene.add.zone(640, 360, 1280, 720);
+        hitZone.setDepth(baseDepth + 20);
+        hitZone.setInteractive();
+        scene._gameOverHitZone = hitZone;
 
         hitZone.on('pointerdown', () => {
             scene.tweens.add({
@@ -546,6 +525,11 @@ export class GameOverOverlay {
 
         if (scene.visualDeck) {
             scene.visualDeck.setAlpha(1);
+        }
+
+        if (scene._gameOverHitZone) {
+            scene._gameOverHitZone.destroy();
+            scene._gameOverHitZone = null;
         }
 
         if (scene._gameOverContainer) {

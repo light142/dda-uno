@@ -647,9 +647,9 @@ export const GAME_OVER = {
         EASE: 'Back.easeOut',
         COUNTDOWN_SECONDS: 15,
         TIMER: {
-            FONT_SIZE: 24,
+            FONT_SIZE: 30,
             COLOR: '#998877',
-            OFFSET_Y: 50,
+            OFFSET_Y: 60,
         },
         BUTTON: {
             WIDTH: 240,
@@ -673,5 +673,5 @@ export const GAME_OVER = {
 };
 
 // Set to true to show a debug "Game Over" button during gameplay
-export const DEBUG_GAME_OVER_BUTTON = false;
+export const DEBUG_GAME_OVER_BUTTON = true;
 
