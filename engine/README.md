@@ -1,4 +1,4 @@
-# Ada UNO — AI Bot System with Win Rate Control
+# ADA UNO (Adaptive Difficulty Adjustment) — AI Bot System with Win Rate Control
 
 Multi-agent AI system for UNO where 3 AI bots play against 1 human player.
 The bots dynamically adjust their play strength so the player's win rate

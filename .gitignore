@@ -11,10 +11,12 @@ build/
 # IDE and editor files
 .vscode/
 .idea/
-.claude/
 *.swp
 *.swo
 *~
+
+# Claude Code
+.claude/
 
 # OS files
 .DS_Store
@@ -24,6 +26,7 @@ desktop.ini
 # Environment variables
 .env
 .env.local
+.env.*
 
 # Logs
 *.log
@@ -51,4 +54,20 @@ htmlcov/
 .coverage
 .coverage.*
 
-.claude/
+# PyTorch model weights (large binaries — train locally, don't commit)
+engine/models/**/*.pt
+engine/models/**/*.pth
+
+# Simulation output data (regenerated on each run)
+engine/data/*.json
+engine/data/*.csv
+engine/data/*.db
+
+# Keep directory structure with .gitkeep
+!engine/models/.gitkeep
+!engine/data/.gitkeep
+
+# SQLite
+*.sqlite3
+*.sqlite3-journal
+*.db-journal

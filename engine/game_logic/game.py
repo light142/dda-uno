@@ -5,6 +5,7 @@ at each seat. Used by training, simulation, and the API layer.
 """
 
 import rlcard
+from rlcard.games.uno.game import UnoGame as RLCardUnoGame
 from rlcard.utils import reorganize
 
 from config.game import NUM_PLAYERS, PLAYER_SEAT, NUM_ACTIONS, SEED
@@ -24,13 +25,20 @@ class UnoGame:
         Args:
             seed: Random seed for reproducibility. None for random.
         """
-        config = {
-            'game_num_players': NUM_PLAYERS,
-        }
+        config = {}
         if seed is not None:
             config['seed'] = seed
 
         self.env = rlcard.make('uno', config=config)
+
+        # RLCard's UNO env ignores game_num_players config (only supported
+        # for blackjack/holdem). Manually replace the game object to get
+        # the correct player count.
+        if NUM_PLAYERS != 2:
+            self.env.game = RLCardUnoGame(num_players=NUM_PLAYERS)
+            self.env.num_players = NUM_PLAYERS
+            self.env.state_shape = [[4, 4, 15] for _ in range(NUM_PLAYERS)]
+            self.env.action_shape = [None for _ in range(NUM_PLAYERS)]
         self._agents = None
 
     def set_agents(self, agents: list) -> None:

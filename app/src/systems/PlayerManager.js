@@ -1,6 +1,7 @@
 import { Player } from '../entities/Player.js';
 import { PlayerAvatar } from '../entities/PlayerAvatar.js';
 import { SEAT_POSITIONS } from '../config/settings.js';
+import { ApiClient } from '../api/ApiClient.js';
 
 /**
  * PlayerManager - manages players at the table
@@ -26,8 +27,8 @@ export class PlayerManager {
             const isLocal = pos.position === 'bottom';
             const player = new Player(index, pos.position, pos.x, pos.y, isLocal);
 
-            // Local player gets a readable nickname, others get masked names
-            player.setName(isLocal ? this.generateNickname() : this.generateMaskedName());
+            // Local player uses their username if logged in, otherwise a random nickname
+            player.setName(isLocal ? (ApiClient.username || this.generateNickname()) : this.generateMaskedName());
 
             this.players.push(player);
         });

@@ -1,4 +1,2 @@
-from config.game import *
-from config.training import *
-from config.simulation import *
-from config.controller import *
+from engine.config.game import *
+from engine.config.controller import *

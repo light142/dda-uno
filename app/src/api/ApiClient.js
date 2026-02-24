@@ -32,6 +32,7 @@ export class ApiClient {
     static BASE_URL = '';
     static accessToken = null;
     static refreshToken = null;
+    static username = null;
 
     // ── Configuration ───────────────────────────────────
 
@@ -42,11 +43,40 @@ export class ApiClient {
     static setTokens(access, refresh) {
         this.accessToken = access;
         this.refreshToken = refresh;
+        try {
+            localStorage.setItem('uno_access_token', access || '');
+            localStorage.setItem('uno_refresh_token', refresh || '');
+        } catch (_) { /* storage unavailable */ }
     }
 
     static clearTokens() {
         this.accessToken = null;
         this.refreshToken = null;
+        this.username = null;
+        try {
+            localStorage.removeItem('uno_access_token');
+            localStorage.removeItem('uno_refresh_token');
+            localStorage.removeItem('uno_username');
+        } catch (_) { /* storage unavailable */ }
+    }
+
+    /**
+     * Restore tokens from localStorage (survives page refresh).
+     * Returns true if tokens were found.
+     */
+    static restoreTokens() {
+        try {
+            const access = localStorage.getItem('uno_access_token');
+            const refresh = localStorage.getItem('uno_refresh_token');
+            const username = localStorage.getItem('uno_username');
+            if (access) {
+                this.accessToken = access;
+                this.refreshToken = refresh;
+                this.username = username;
+                return true;
+            }
+        } catch (_) { /* storage unavailable */ }
+        return false;
     }
 
     static isAuthenticated() {
@@ -81,7 +111,10 @@ export class ApiClient {
             return this._handleResponse(response);
         } catch (err) {
             if (err instanceof GameApiError) throw err;
-            throw new GameApiError(0, 'NETWORK_ERROR', err.message || 'Network request failed');
+            const message = err.name === 'AbortError'
+                ? 'Request timed out — check your connection'
+                : (err.message || 'Network request failed');
+            throw new GameApiError(0, 'NETWORK_ERROR', message);
         }
     }
 
@@ -96,13 +129,24 @@ export class ApiClient {
     // ── Auth Endpoints (for login page) ─────────────────
 
     /**
-     * Exchange a Google OAuth ID token for app session tokens.
-     * Creates account on first login.
+     * Log in with email and password.
+     * @returns {object} User profile data
      */
-    static async loginWithGoogle(idToken) {
-        const response = await this._fetch('POST', '/api/auth/google', { idToken });
-        const data = await this._handleResponse(response);
-        this.setTokens(data.accessToken, data.refreshToken);
+    static async login(email, password) {
+        const data = await this.request('POST', '/api/auth/login', { email, password });
+        this.setTokens(data.tokens.access_token, data.tokens.refresh_token);
+        this._saveUsername(data.user.username);
+        return data.user;
+    }
+
+    /**
+     * Register a new account.
+     * @returns {object} User profile data
+     */
+    static async register(email, password, username) {
+        const data = await this.request('POST', '/api/auth/register', { email, password, username });
+        this.setTokens(data.tokens.access_token, data.tokens.refresh_token);
+        this._saveUsername(data.user.username);
         return data.user;
     }
 
@@ -111,10 +155,10 @@ export class ApiClient {
      */
     static async refreshAccessToken() {
         const response = await this._fetch('POST', '/api/auth/refresh', {
-            refreshToken: this.refreshToken,
+            refresh_token: this.refreshToken,
         });
         const data = await this._handleResponse(response);
-        this.setTokens(data.accessToken, data.refreshToken);
+        this.setTokens(data.access_token, data.refresh_token);
         return data;
     }
 
@@ -132,10 +176,17 @@ export class ApiClient {
 
     // ── Private Helpers ─────────────────────────────────
 
+    static _saveUsername(name) {
+        this.username = name;
+        try { localStorage.setItem('uno_username', name || ''); } catch (_) { /* */ }
+    }
+
     /**
      * Raw fetch call with headers.
      * @private
      */
+    static REQUEST_TIMEOUT = 5_000; // 5 seconds
+
     static async _fetch(method, path, body = null) {
         const url = `${this.BASE_URL}${path}`;
         const headers = { 'Content-Type': 'application/json' };
@@ -144,12 +195,19 @@ export class ApiClient {
             headers['Authorization'] = `Bearer ${this.accessToken}`;
         }
 
-        const options = { method, headers };
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.REQUEST_TIMEOUT);
+
+        const options = { method, headers, signal: controller.signal };
         if (body !== null && method !== 'GET') {
             options.body = JSON.stringify(body);
         }
 
-        return fetch(url, options);
+        try {
+            return await fetch(url, options);
+        } finally {
+            clearTimeout(timeoutId);
+        }
     }
 
     /**

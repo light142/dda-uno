@@ -1,0 +1,74 @@
+"""
+Ada UNO API — FastAPI application entry point.
+
+Run with:
+    uvicorn main:app --reload
+"""
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from config import get_settings
+from database import create_tables
+from auth.router import router as auth_router
+from game.router import router as game_router
+from game.bot_manager import BotManager
+from player.router import router as player_router
+
+settings = get_settings()
+
+
+# ── Lifespan (startup / shutdown) ─────────────────────────────────────────
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Create database tables on startup."""
+    await create_tables()
+    yield
+
+
+# ── App ───────────────────────────────────────────────────────────────────
+
+app = FastAPI(
+    title="Ada UNO API",
+    version="1.0.0",
+    description="Adaptive difficulty UNO game API with AI bots that adjust to each player's skill level.",
+    lifespan=lifespan,
+)
+
+# CORS — split comma-separated origins or use wildcard
+origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Routers
+app.include_router(auth_router)
+app.include_router(game_router)
+app.include_router(player_router)
+
+
+# ── Health check ──────────────────────────────────────────────────────────
+
+
+@app.get("/", tags=["Health"])
+async def root():
+    """Basic health check."""
+    return {"status": "ok", "version": "1.0.0"}
+
+
+# ── Model info ────────────────────────────────────────────────────────────
+
+
+@app.get("/api/models/info", tags=["Models"], summary="Get model version info")
+async def model_info():
+    """Return the current model version and training metadata from manifest.json."""
+    manager = BotManager(settings.MODEL_DIR)
+    return manager.get_manifest()

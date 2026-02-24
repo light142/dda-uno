@@ -1,0 +1,426 @@
+"""
+Game service — orchestrates UnoGameEngine + BotManager + DB persistence.
+
+Handles game lifecycle: create, play, pass, get state.
+Adjusts bot difficulty per-player after each finished game.
+"""
+
+import json
+from datetime import datetime, timezone
+from typing import Optional
+
+from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models import User, Game
+from config import get_settings
+from .engine import UnoGameEngine
+from .bot_manager import BotManager
+from .cards import Card
+from .schemas import (
+    CardSchema,
+    BotTurnSchema,
+    GameStateSchema,
+    ModelInfoSchema,
+    DebugCardsRequest,
+    DebugCardsResponse,
+    StartGameResponse,
+    PlayResponse,
+    PassResponse,
+    ActiveGameResponse,
+)
+
+settings = get_settings()
+_bot_manager = BotManager(settings.MODEL_DIR)
+
+# In-memory debug card overrides, keyed by user_id.
+# When set, create_game uses these instead of random dealing.
+_debug_cards: dict[str, dict] = {}
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _build_game_state(game: Game, engine: UnoGameEngine) -> GameStateSchema:
+    """Build a GameStateSchema from a Game row and live engine."""
+    state = engine.get_state_for_player(0)
+    return GameStateSchema(
+        gameId=game.id,
+        status=game.status,
+        playerHands=state["playerHands"],
+        topCard=CardSchema(**state["topCard"]) if state["topCard"] else None,
+        discardPile=[CardSchema(**c) for c in state["discardPile"]],
+        activeColor=state["activeColor"],
+        isClockwise=state["isClockwise"],
+        deckRemaining=state["deckRemaining"],
+        currentPlayer=engine.current_player,
+        winner=state["winner"],
+    )
+
+
+def _build_bot_turns(raw_turns: list[dict]) -> list[BotTurnSchema]:
+    """Convert raw bot turn dicts to schema objects."""
+    result = []
+    for t in raw_turns:
+        card = CardSchema(**t["card"]) if t.get("card") else None
+        raw_drawn = t.get("drawnCards", 0)
+        # Human penalty draws come as list of card dicts; bot draws as int
+        if isinstance(raw_drawn, list):
+            drawn_cards = [CardSchema(**c) for c in raw_drawn]
+        else:
+            drawn_cards = raw_drawn
+        result.append(BotTurnSchema(
+            playerIndex=t["playerIndex"],
+            action=t["action"],
+            card=card,
+            drawnCards=drawn_cards,
+            chosenColor=t.get("chosenColor"),
+        ))
+    return result
+
+
+def _model_info() -> ModelInfoSchema:
+    """Get current model info from manifest."""
+    m = _bot_manager.get_manifest()
+    return ModelInfoSchema(
+        version=m.get("version", "unknown"),
+        trainedAt=m.get("trained_at"),
+    )
+
+
+def _make_decision_fn(agents: list, use_models: bool):
+    """Create a bot decision callback for the engine."""
+    def decide(player_index: int, hand: list[Card],
+               top_card: Card, active_color: str):
+        if use_models and agents:
+            agent = agents[player_index - 1]
+            return _bot_manager.get_bot_decision(agent, hand, top_card, active_color)
+        return _bot_manager.make_random_decision(hand, top_card, active_color)
+    return decide
+
+
+def _apply_debug_cards(engine: UnoGameEngine, debug: dict):
+    """Override engine state with debug card configuration."""
+    # Override starter card
+    sc = debug["starterCard"]
+    starter = Card(suit=sc["suit"], value=sc["value"])
+    engine.top_card = starter
+    engine.discard_pile = [Card(suit=starter.suit, value=starter.value)]
+    engine.active_color = debug.get("activeColor") or starter.suit or "red"
+
+    # Override player hands if provided
+    player_hands = debug.get("playerHands")
+    if player_hands:
+        # Return current hand cards to deck
+        for hand in engine.hands:
+            engine.deck.cards.extend(hand)
+        engine.hands = []
+        for hand_data in player_hands:
+            hand = []
+            for c in hand_data:
+                card = Card(suit=c["suit"], value=c["value"])
+                # Remove from deck if present (keep totals consistent)
+                idx = next(
+                    (i for i, dc in enumerate(engine.deck.cards)
+                     if dc.suit == card.suit and dc.value == card.value),
+                    None,
+                )
+                if idx is not None:
+                    engine.deck.cards.pop(idx)
+                hand.append(card)
+            engine.hands.append(hand)
+        # Pad to 4 players if fewer hands given
+        while len(engine.hands) < engine.num_players:
+            engine.hands.append([])
+        # Fill each hand up to 7 cards by drawing from the deck
+        for hand in engine.hands:
+            while len(hand) < 7 and engine.deck.cards:
+                hand.append(engine.deck.draw())
+
+    engine.current_player = 0
+
+
+# ── Debug cards ──────────────────────────────────────────────────────────
+
+
+def set_debug_cards(user_id: str, body: DebugCardsRequest) -> DebugCardsResponse:
+    """Store fixed card configuration for this user."""
+    data = {
+        "starterCard": body.starterCard.model_dump(),
+        "activeColor": body.activeColor,
+    }
+    if body.playerHands is not None:
+        data["playerHands"] = [
+            [c.model_dump() for c in hand] for hand in body.playerHands
+        ]
+    _debug_cards[user_id] = data
+    return DebugCardsResponse(active=True, config=data)
+
+
+def clear_debug_cards(user_id: str) -> DebugCardsResponse:
+    """Remove fixed card configuration for this user."""
+    _debug_cards.pop(user_id, None)
+    return DebugCardsResponse(active=False, config=None)
+
+
+def get_debug_cards(user_id: str) -> DebugCardsResponse:
+    """Return current debug card configuration."""
+    data = _debug_cards.get(user_id)
+    return DebugCardsResponse(active=data is not None, config=data)
+
+
+# ── Public service functions ─────────────────────────────────────────────
+
+
+async def create_game(user: User, db: AsyncSession) -> StartGameResponse:
+    """Start a new game for the given user.
+
+    If debug cards are set for this user, uses them instead of random dealing.
+    """
+    # Abandon any existing in-progress game
+    result = await db.execute(
+        select(Game).where(and_(
+            Game.user_id == user.id,
+            Game.status == "in_progress",
+        ))
+    )
+    active_game = result.scalar_one_or_none()
+    if active_game:
+        active_game.status = "abandoned"
+        active_game.finished_at = _utcnow()
+
+    # Create engine and start game
+    engine = UnoGameEngine()
+    engine.start_game()
+
+    # Apply debug card overrides if set
+    debug = _debug_cards.get(user.id)
+    if debug:
+        _apply_debug_cards(engine, debug)
+
+    # Create bot agents
+    use_models = _bot_manager.models_available()
+    agents = _bot_manager.create_agents(user.bot_strength) if use_models else []
+
+    # Run initial bot turns if player 0 doesn't go first
+    if engine.current_player != 0:
+        decision_fn = _make_decision_fn(agents, use_models)
+        engine.run_bot_turns(decision_fn)
+
+    # Save game to DB
+    manifest = _bot_manager.get_manifest()
+    game = Game(
+        user_id=user.id,
+        status="in_progress",
+        state_json=json.dumps(engine.serialize()),
+        turns=engine.turns,
+        bot_strength_start=user.bot_strength,
+        model_version=manifest.get("version", "unknown"),
+    )
+    db.add(game)
+    await db.commit()
+    await db.refresh(game)
+
+    game_state = _build_game_state(game, engine)
+    return StartGameResponse(
+        gameState=game_state,
+        modelInfo=_model_info(),
+    )
+
+
+async def play_card(
+    game_id: str,
+    user: User,
+    card_data: CardSchema,
+    chosen_color: Optional[str],
+    db: AsyncSession,
+) -> PlayResponse:
+    """Human plays a card, then bots respond.
+
+    After a game ends, adjusts bot strength based on outcome.
+    """
+    game = await _load_game(game_id, user.id, db)
+    engine = UnoGameEngine.deserialize(json.loads(game.state_json))
+
+    # Validate it's the human's turn
+    if engine.current_player != 0:
+        return PlayResponse(
+            valid=False,
+            botTurns=[],
+            gameState=_build_game_state(game, engine),
+        )
+
+    # Play the card
+    result = engine.play_card(0, card_data.model_dump(), chosen_color)
+
+    if not result.get("valid"):
+        return PlayResponse(
+            valid=False,
+            botTurns=[],
+            gameState=_build_game_state(game, engine),
+        )
+
+    # Prepend penalty draw (plus2/plus4) as a bot turn so the frontend animates it
+    bot_turns_raw = []
+    penalty = result.get("penalty_draw")
+    if penalty:
+        bot_turns_raw.append({
+            "playerIndex": penalty["playerIndex"],
+            "action": "draw",
+            "card": None,
+            "drawnCards": penalty["drawnCards"],
+            "chosenColor": None,
+        })
+
+    # Check if human just won
+    if result.get("winner") is None:
+        # Run bot turns
+        use_models = _bot_manager.models_available()
+        agents = _bot_manager.create_agents(game.bot_strength_start) if use_models else []
+        decision_fn = _make_decision_fn(agents, use_models)
+        bot_turns_raw += engine.run_bot_turns(decision_fn)
+
+    # Check for winner (human or bot)
+    winner = engine.get_winner()
+    if winner is not None:
+        await _finish_game(game, engine, user, winner, db)
+    else:
+        # Save updated state
+        game.state_json = json.dumps(engine.serialize())
+        game.turns = engine.turns
+
+    await db.commit()
+
+    return PlayResponse(
+        valid=True,
+        botTurns=_build_bot_turns(bot_turns_raw),
+        gameState=_build_game_state(game, engine),
+    )
+
+
+async def pass_turn(
+    game_id: str,
+    user: User,
+    db: AsyncSession,
+) -> PassResponse:
+    """Human draws a card and passes, then bots respond."""
+    game = await _load_game(game_id, user.id, db)
+    engine = UnoGameEngine.deserialize(json.loads(game.state_json))
+
+    # Validate it's the human's turn
+    if engine.current_player != 0:
+        return PassResponse(
+            drawnCard=None,
+            botTurns=[],
+            gameState=_build_game_state(game, engine),
+        )
+
+    # Human draws and passes
+    result = engine.pass_turn(0)
+    drawn_card = CardSchema(**result["drawn_card"]) if result.get("drawn_card") else None
+
+    # Run bot turns
+    use_models = _bot_manager.models_available()
+    agents = _bot_manager.create_agents(game.bot_strength_start) if use_models else []
+    decision_fn = _make_decision_fn(agents, use_models)
+    bot_turns_raw = engine.run_bot_turns(decision_fn)
+
+    # Check for winner
+    winner = engine.get_winner()
+    if winner is not None:
+        await _finish_game(game, engine, user, winner, db)
+    else:
+        game.state_json = json.dumps(engine.serialize())
+        game.turns = engine.turns
+
+    await db.commit()
+
+    return PassResponse(
+        drawnCard=drawn_card,
+        botTurns=_build_bot_turns(bot_turns_raw),
+        gameState=_build_game_state(game, engine),
+    )
+
+
+async def get_game(game_id: str, user: User, db: AsyncSession) -> GameStateSchema:
+    """Load and return current game state (for reconnection)."""
+    game = await _load_game(game_id, user.id, db)
+    engine = UnoGameEngine.deserialize(json.loads(game.state_json))
+    return _build_game_state(game, engine)
+
+
+async def find_active_game(user: User, db: AsyncSession) -> ActiveGameResponse:
+    """Check if the player has an in-progress game and return its state."""
+    result = await db.execute(
+        select(Game).where(and_(
+            Game.user_id == user.id,
+            Game.status == "in_progress",
+        ))
+    )
+    game = result.scalar_one_or_none()
+
+    if game is None:
+        return ActiveGameResponse(hasActiveGame=False, gameState=None)
+
+    engine = UnoGameEngine.deserialize(json.loads(game.state_json))
+    return ActiveGameResponse(
+        hasActiveGame=True,
+        gameState=_build_game_state(game, engine),
+    )
+
+
+# ── Private helpers ──────────────────────────────────────────────────────
+
+
+async def _load_game(game_id: str, user_id: str, db: AsyncSession) -> Game:
+    """Load a game by ID, verify ownership and status."""
+    from fastapi import HTTPException, status
+
+    result = await db.execute(
+        select(Game).where(and_(Game.id == game_id, Game.user_id == user_id))
+    )
+    game = result.scalar_one_or_none()
+
+    if game is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Game not found.",
+        )
+
+    if game.status != "in_progress":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Game is already {game.status}.",
+        )
+
+    return game
+
+
+async def _finish_game(
+    game: Game,
+    engine: UnoGameEngine,
+    user: User,
+    winner: int,
+    db: AsyncSession,
+):
+    """Finalize a game: update records, adjust bot strength."""
+    game.status = "finished"
+    game.winner = winner
+    game.turns = engine.turns
+    game.state_json = json.dumps(engine.serialize())
+    game.finished_at = _utcnow()
+
+    # Update user stats
+    user.games_played = (user.games_played or 0) + 1
+    if winner == 0:
+        user.wins = (user.wins or 0) + 1
+
+    # Calculate current win rate
+    win_rate = user.wins / user.games_played if user.games_played > 0 else 0.0
+    game.player_win_rate_at_game = round(win_rate, 4)
+
+    # Adjust bot strength via controller
+    new_strength = _bot_manager.adjust_strength(win_rate, user.bot_strength)
+    game.bot_strength_end = new_strength
+    user.bot_strength = new_strength

@@ -1,17 +1,17 @@
 import { GameApiError } from '../api/ApiClient.js';
 
 const POPUP = {
-    WIDTH: 420,
-    HEIGHT: 80,
-    CORNER_RADIUS: 16,
+    WIDTH: 560,
+    HEIGHT: 110,
+    CORNER_RADIUS: 20,
     BG_COLOR: 0x1a0a0a,
     BG_ALPHA: 0.88,
     BORDER_COLOR: 0xFFD700,
     BORDER_WIDTH: 2,
     TEXT_COLOR: '#ECDABD',
-    TEXT_SIZE: 18,
+    TEXT_SIZE: 24,
     HINT_COLOR: '#998877',
-    HINT_SIZE: 12,
+    HINT_SIZE: 15,
     DEPTH: 200,
     Y: 340,
     AUTO_DISMISS_MS: 3000,
@@ -89,10 +89,9 @@ export class ErrorPopup {
         hint.setOrigin(0.5);
         container.add(hint);
 
-        // Make tappable (invisible hit area)
-        const hitArea = scene.add.rectangle(0, 0, POPUP.WIDTH, POPUP.HEIGHT)
+        // Make tappable — full-size invisible hit zone
+        const hitArea = scene.add.zone(0, 0, POPUP.WIDTH, POPUP.HEIGHT)
             .setOrigin(0.5)
-            .setAlpha(0.01)
             .setInteractive({ useHandCursor: true });
         container.add(hitArea);
 
@@ -155,8 +154,7 @@ export class ErrorPopup {
 
         const container = scene._errorPopup;
         if (!container) return;
-        scene._errorPopup = null;
-
+        // Keep reference until tween completes so forceClear can still find it
         scene.tweens.add({
             targets: container,
             alpha: 0,
@@ -166,8 +164,24 @@ export class ErrorPopup {
             ease: 'Sine.easeIn',
             onComplete: () => {
                 container.destroy();
+                if (scene._errorPopup === container) scene._errorPopup = null;
             },
         });
+    }
+
+    /**
+     * Instantly remove the popup without animation (safe before tweens.killAll).
+     */
+    static forceClear(scene) {
+        if (scene._errorPopupTimer) {
+            scene._errorPopupTimer.remove(false);
+            scene._errorPopupTimer = null;
+        }
+        if (scene._errorPopup) {
+            scene.tweens.killTweensOf(scene._errorPopup);
+            scene._errorPopup.destroy();
+            scene._errorPopup = null;
+        }
     }
 
     /**
@@ -178,17 +192,27 @@ export class ErrorPopup {
      */
     static friendlyMessage(err) {
         if (err instanceof GameApiError) {
+            // Network / timeout (status 0 = no HTTP response)
+            if (err.status === 0 || err.code === 'NETWORK_ERROR') {
+                return err.message?.includes('timed out')
+                    ? 'Connection timed out. Please try again.'
+                    : 'Could not reach the server. Please try again.';
+            }
             switch (err.status) {
                 case 400: return "Hmm, that move didn't work. Try another card!";
                 case 401: return 'Your session expired. Please log in again!';
                 case 404: return 'This game session was lost. Starting fresh...';
                 case 409: return 'Oops! The game state got mixed up. Refreshing...';
-                default:  return 'The card gods are confused... Try again!';
+                default:  return 'The server drew a bad hand. Try again!';
             }
         }
-        const msg = err?.message || '';
-        if (msg.includes('fetch') || msg.includes('Failed') || msg.includes('network')) {
-            return 'Lost connection to the server! Check your internet.';
+        const msg = err?.message?.toLowerCase() || '';
+        const name = err?.name || '';
+        if (name === 'AbortError' || msg.includes('abort') || msg.includes('timed out') || msg.includes('timeout')) {
+            return 'Connection timed out. Please try again.';
+        }
+        if (msg.includes('fetch') || msg.includes('failed') || msg.includes('network') || msg.includes('load')) {
+            return 'Could not reach the server. Please try again.';
         }
         return 'Something went wrong. Give it another shot!';
     }

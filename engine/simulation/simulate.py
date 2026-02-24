@@ -45,6 +45,7 @@ def run_baseline(num_games: int) -> dict:
         dict with per-seat win counts and rates.
     """
     print(f"Running BASELINE simulation ({num_games} games, all random agents)")
+    print(f"  Goal: verify ~25% win rate per seat (fair random play)")
     print()
 
     game = UnoGame()
@@ -59,26 +60,41 @@ def run_baseline(num_games: int) -> dict:
         wins[result['winner']] += 1
 
         if i % 100 == 0 or i == num_games:
-            rates = {s: wins[s] / i for s in range(NUM_PLAYERS)}
+            player_wr = wins[PLAYER_SEAT] / i
             print(
                 f"Game {i}/{num_games} | "
-                + " | ".join(f"Seat {s}: {rates[s]:.1%}" for s in range(NUM_PLAYERS))
+                f"Player (seat 0) WR: {player_wr:.1%} | "
+                f"Bots: {', '.join(f's{s}: {wins[s]/i:.1%}' for s in BOT_SEATS)}"
             )
 
         history.append({
             'game': i,
             'winner': result['winner'],
-            'win_rates': {s: wins[s] / i for s in range(NUM_PLAYERS)},
+            'player_win_rate': wins[PLAYER_SEAT] / i,
         })
 
+    final_player_wr = wins[PLAYER_SEAT] / num_games
     final_rates = {s: wins[s] / num_games for s in range(NUM_PLAYERS)}
-    print(f"\nFinal win rates: {', '.join(f'Seat {s}: {r:.1%}' for s, r in final_rates.items())}")
+    print(f"\n{'='*50}")
+    print(f"  Player (seat 0) win rate: {final_player_wr:.1%}  (expected ~25%)")
+    print(f"  Bot win rates: {', '.join(f's{s}: {final_rates[s]:.1%}' for s in BOT_SEATS)}")
+    print(f"{'='*50}")
+
+    player_wins = wins[PLAYER_SEAT]
+    player_losses = num_games - player_wins
 
     return {
         'mode': 'baseline',
         'num_games': num_games,
-        'wins': wins,
-        'win_rates': final_rates,
+        'player': {
+            'wins': player_wins,
+            'losses': player_losses,
+            'win_percentage': f"{final_player_wr:.1%}",
+        },
+        'all_seats': {
+            'wins': wins,
+            'win_rates': final_rates,
+        },
         'history': history,
     }
 
@@ -100,8 +116,8 @@ def run_adaptive(num_games: int, bot_name: str) -> dict:
     from game_logic.agents.adaptive import AdaptiveAgent
 
     print(f"Running ADAPTIVE simulation ({num_games} games)")
-    print(f"  Seat 0: {bot_name} bot")
-    print(f"  Target win rate: {TARGET_WIN_RATE:.0%}")
+    print(f"  Player (seat 0): {bot_name} bot")
+    print(f"  Goal: player win rate -> {TARGET_WIN_RATE:.0%}")
     print(f"  Strong model: {STRONG_MODEL_PATH}")
     print(f"  Weak model: {WEAK_MODEL_PATH}")
     print()
@@ -171,25 +187,33 @@ def run_adaptive(num_games: int, bot_name: str) -> dict:
         if i % 100 == 0 or i == num_games:
             print(
                 f"Game {i}/{num_games} | "
-                f"Seat 0 WR: {current_win_rate:.1%} "
-                f"(target: {TARGET_WIN_RATE:.0%}) | "
-                f"Strength: {new_strength:.3f}"
+                f"Player WR: {current_win_rate:.1%} "
+                f"(goal: {TARGET_WIN_RATE:.0%}) | "
+                f"Bot strength: {new_strength:.3f}"
             )
 
     final_rate = wins[PLAYER_SEAT] / num_games
-    print(f"\nFinal seat 0 win rate: {final_rate:.1%} (target: {TARGET_WIN_RATE:.0%})")
-    print(f"Final bot strength: {adaptive_agents[0].strength:.3f}")
-    print(f"Error: {abs(final_rate - TARGET_WIN_RATE):.1%}")
+    print(f"\n{'='*50}")
+    print(f"  Player win rate: {final_rate:.1%}  (goal: {TARGET_WIN_RATE:.0%})")
+    print(f"  Bot strength:    {adaptive_agents[0].strength:.3f}")
+    print(f"  Error from goal: {abs(final_rate - TARGET_WIN_RATE):.1%}")
+    print(f"{'='*50}")
+
+    player_wins = wins[PLAYER_SEAT]
+    player_losses = num_games - player_wins
 
     return {
         'mode': 'adaptive',
-        'bot_name': bot_name,
         'num_games': num_games,
-        'target_win_rate': TARGET_WIN_RATE,
-        'final_win_rate': final_rate,
-        'final_strength': adaptive_agents[0].strength,
-        'error': abs(final_rate - TARGET_WIN_RATE),
-        'wins': wins,
+        'player': {
+            'bot_standing_in': bot_name,
+            'wins': player_wins,
+            'losses': player_losses,
+            'win_percentage': f"{final_rate:.1%}",
+            'target_win_percentage': f"{TARGET_WIN_RATE:.0%}",
+            'error_from_target': f"{abs(final_rate - TARGET_WIN_RATE):.1%}",
+        },
+        'bot_strength': adaptive_agents[0].strength,
         'history': history,
     }
 

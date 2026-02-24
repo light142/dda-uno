@@ -30,6 +30,7 @@ export class GameApiAdapter {
         return {
             playerHands: gs.playerHands,
             starterCard: gs.topCard,
+            activeColor: gs.activeColor,
             deckRemaining: gs.deckRemaining,
             deckTotal: gs.deckRemaining + (gs.discardPile?.length || 0)
                 + this._countAllHands(gs.playerHands),
@@ -60,6 +61,9 @@ export class GameApiAdapter {
             isClockwise: res.gameState.isClockwise,
             deckRemaining: res.gameState.deckRemaining,
             winner: res.gameState.winner,
+            playerHands: res.gameState.playerHands,
+            discardPile: res.gameState.discardPile,
+            currentPlayer: res.gameState.currentPlayer,
         };
     }
 
@@ -90,6 +94,21 @@ export class GameApiAdapter {
         const res = await ApiClient.get(`/api/games/${this.gameId}`);
         this._cachedState = res.gameState;
         return res.gameState;
+    }
+
+    /**
+     * Check if the player has an in-progress game.
+     * Maps to: GET /api/games/active
+     *
+     * @returns {{ hasActiveGame: boolean, gameState: object|null }}
+     */
+    async checkActiveGame() {
+        const res = await ApiClient.get('/api/games/active');
+        if (res.hasActiveGame && res.gameState) {
+            this.gameId = res.gameState.gameId;
+            this._cachedState = res.gameState;
+        }
+        return res;
     }
 
     // ── Cached Accessors (same interface as LocalGameSimulator) ──

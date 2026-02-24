@@ -72,8 +72,8 @@ export class GameLogic {
 
     /**
      * Get the next player index given direction.
-     * Clockwise (table): 0→3→2→1→0
-     * Counter-clockwise: 0→1→2→3→0
+     * Clockwise: 0→1→2→3→0
+     * Counter-clockwise: 0→3→2→1→0
      * @param {number} fromIndex
      * @param {boolean} isClockwise
      * @param {number} playerCount
@@ -81,8 +81,8 @@ export class GameLogic {
      */
     static getNextPlayerIndex(fromIndex, isClockwise, playerCount = 4) {
         return isClockwise
-            ? (fromIndex - 1 + playerCount) % playerCount
-            : (fromIndex + 1) % playerCount;
+            ? (fromIndex + 1) % playerCount
+            : (fromIndex - 1 + playerCount) % playerCount;
     }
 
     /**

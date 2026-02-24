@@ -1,3 +1,6 @@
+// API base URL — set to your backend in production
+export const API_BASE_URL = 'http://192.168.4.35:8000';
+
 export const SEAT_POSITIONS = [
     { position: 'bottom', x: 250, y: 600 },
     { position: 'left', x: 100, y: 250 },
@@ -75,6 +78,12 @@ export const RESHUFFLE = {
     FLY_STAGGER: 50,
     ARC_HEIGHT: 80,
     PAUSE_BEFORE_SHUFFLE: 100,
+};
+
+export const RESYNC = {
+    GATHER_DURATION: 250,
+    GATHER_STAGGER: 15,
+    PAUSE_BEFORE_DEAL: 150,
 };
 
 export const DECK_VISUAL = {
@@ -417,7 +426,7 @@ export const GAME_INTRO = {
         TEXT: 'Tap to Play',
         HINT: '',
         X: 640,
-        Y: 280,
+        Y: 360,
         FONT_SIZE: 42,
         FONT_FAMILY: 'Nunito, Arial',
         // Neon glow layers (back to front)

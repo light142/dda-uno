@@ -7,7 +7,7 @@ import { DirectionArrow } from '../entities/DirectionArrow.js';
 import { PassButton } from '../entities/PassButton.js';
 import { UnoButton } from '../entities/UnoButton.js';
 import { Card } from '../entities/Card.js';
-import { CARD_OFFSET_TO_CENTER, DRAG_DROP, ANIMATION, POWER_CARD_FX, COLOR_REPLACE, RESHUFFLE, DECK_VISUAL, GAME_INTRO, HAMBURGER_MENU } from '../config/settings.js';
+import { CARD_OFFSET_TO_CENTER, CARD_SCALE, DRAG_DROP, ANIMATION, POWER_CARD_FX, COLOR_REPLACE, RESHUFFLE, RESYNC, DECK_VISUAL, GAME_INTRO, HAMBURGER_MENU } from '../config/settings.js';
 import { GameLogic } from '../logic/GameLogic.js';
 import { MoveExecutor } from '../systems/MoveExecutor.js';
 import { StateManager } from '../systems/StateManager.js';
@@ -17,6 +17,7 @@ import { ApiClient } from '../api/ApiClient.js';
 import { GameApiAdapter } from '../api/GameApiAdapter.js';
 import { ErrorPopup } from '../ui/ErrorPopup.js';
 import { ColorPicker } from '../ui/ColorPicker.js';
+import { ResumeToast } from '../ui/ResumeToast.js';
 
 export class GameScene extends Phaser.Scene {
     constructor() {
@@ -32,7 +33,6 @@ export class GameScene extends Phaser.Scene {
         this.topCard = null;
         this.activeColor = null;
         this.isClockwise = true;
-        this.isR = true;
     }
 
     /**
@@ -71,6 +71,34 @@ export class GameScene extends Phaser.Scene {
         this.setupHamburgerMenu();
         this.hideBotAvatars();
         this.hideGameUI();
+
+        if (this.gameAdapter instanceof GameApiAdapter) {
+            this._checkForActiveGame();
+        } else {
+            this.showTapToStart();
+        }
+    }
+
+    /**
+     * Check for an in-progress game and show resume prompt if found.
+     * Falls back to normal tap-to-start if no active game or on error.
+     */
+    async _checkForActiveGame() {
+        try {
+            const result = await this.gameAdapter.checkActiveGame();
+
+            if (result.hasActiveGame && result.gameState) {
+                ResumeToast.show(
+                    this,
+                    () => this.resumeFromServer(result.gameState),
+                    () => this.showTapToStart(),
+                );
+                return;
+            }
+        } catch (_) {
+            // If check fails, just proceed normally
+        }
+
         this.showTapToStart();
     }
 
@@ -514,6 +542,7 @@ export class GameScene extends Phaser.Scene {
 
         // ── Nuclear cleanup: halt ALL in-flight animations and timers ──
         // This catches CardDealer's untracked delayedCalls, visual deck shuffles, etc.
+        ErrorPopup.forceClear(this);
         this.time.removeAllEvents();
         this.pendingTimers = [];
         this.tweens.killAll();
@@ -606,7 +635,6 @@ export class GameScene extends Phaser.Scene {
         this.topCard = null;
         this.activeColor = null;
         this.isClockwise = true;
-        this.isR = true;
 
         // Remove drag listeners and re-add on next intro
         this.input.off('dragstart');
@@ -625,6 +653,8 @@ export class GameScene extends Phaser.Scene {
         if (this.menuPanel) { this.menuPanel.destroy(); this.menuPanel = null; this.menuItems = []; }
         this.moveExecutor.cancel();
         if (this.emoteSystem) this.emoteSystem.stopAllEmotes();
+        ApiClient.clearTokens();
+        ApiClient.logout();
         this.scene.start('MainMenuScene');
     }
 
@@ -674,7 +704,6 @@ export class GameScene extends Phaser.Scene {
         this.topCard = null;
         this.activeColor = null;
         this.isClockwise = true;
-        this.isR = true;
         this.directionArrow.setDirection(true);
 
         // Cancel any pending timers from previous round
@@ -693,9 +722,10 @@ export class GameScene extends Phaser.Scene {
         try {
             gameData = await this.gameAdapter.startGame();
         } catch (err) {
-            ErrorPopup.show(this, "Couldn't start a new game. Playing offline!");
-            this.gameAdapter = this.localSimulator;
-            gameData = await this.gameAdapter.startGame();
+            const msg = ErrorPopup.friendlyMessage(err);
+            ErrorPopup.show(this, msg);
+            this.scheduleTimer(3000, () => this.handleRestart());
+            return;
         }
 
         this.deckTotal = gameData.deckTotal;
@@ -755,6 +785,370 @@ export class GameScene extends Phaser.Scene {
         });
     }
 
+    // ── Resume Game ────────────────────────────────────────
+
+    /**
+     * Resume a game from server state with animated positioning.
+     * Runs the intro sequence (bots, arrow, buttons), then animates cards
+     * from the deck into their fan positions instead of dealing.
+     */
+    resumeFromServer(gameState) {
+        // Disable menu immediately so player can't restart/logout during resume
+        this.menuIcon.disableInteractive();
+
+        // Wire up the adapter with the resumed game
+        if (this.gameAdapter instanceof GameApiAdapter) {
+            this.gameAdapter.gameId = gameState.gameId;
+            this.gameAdapter._cachedState = gameState;
+        }
+
+        // Set game state from server
+        this.topCard = gameState.topCard ? { ...gameState.topCard } : null;
+        this.activeColor = gameState.activeColor;
+        this.isClockwise = gameState.isClockwise;
+        this.currentPlayerIndex = gameState.currentPlayer;
+        this.directionArrow.setDirection(gameState.isClockwise);
+
+        // Skip straight to intro + card animation (player already chose "Jump In!")
+        this._resumeIntroSequence(gameState);
+    }
+
+    /**
+     * Animate the intro sequence then arrange resumed game cards.
+     * @private
+     */
+    _resumeIntroSequence(gameState) {
+        const cfg = GAME_INTRO;
+
+        // Animate bot avatars in
+        const botAvatars = this.playerManager.playerAvatars.filter((_, i) => i !== 0);
+        const botCfg = cfg.BOT_ENTRANCE;
+
+        botAvatars.forEach((avatar, i) => {
+            const player = avatar.player;
+            let offsetX = 0, offsetY = 0;
+            if (player.position === 'left') offsetX = -botCfg.OFFSET;
+            else if (player.position === 'right') offsetX = botCfg.OFFSET;
+            else if (player.position === 'top') offsetY = -botCfg.OFFSET;
+
+            const targetX = avatar.x;
+            const targetY = avatar.y;
+            avatar.x = targetX + offsetX;
+            avatar.y = targetY + offsetY;
+            avatar.setScale(botCfg.SCALE_FROM);
+
+            this.tweens.add({
+                targets: avatar,
+                x: targetX,
+                y: targetY,
+                alpha: 1,
+                scaleX: 1,
+                scaleY: 1,
+                duration: botCfg.DURATION,
+                delay: i * botCfg.STAGGER,
+                ease: botCfg.EASE,
+            });
+        });
+
+        const botsLandedDelay = botAvatars.length * botCfg.STAGGER + botCfg.DURATION;
+
+        // Animate direction arrow in
+        const arrowCfg = cfg.ARROW_ENTRANCE;
+        this.scheduleTimer(botsLandedDelay + arrowCfg.DELAY, () => {
+            const sprite = this.directionArrow.sprite;
+            const targetScaleX = this._arrowTargetScaleX;
+            const targetScaleY = this._arrowTargetScaleY;
+            sprite.setAngle(0);
+            sprite.setScale(0);
+            this.tweens.add({
+                targets: sprite,
+                alpha: 1,
+                scaleX: targetScaleX,
+                scaleY: targetScaleY,
+                duration: arrowCfg.DURATION,
+                ease: 'Back.easeOut',
+                onComplete: () => {
+                    this.directionArrow.startIdle();
+                },
+            });
+        });
+
+        // Animate buttons in
+        const btnCfg = cfg.BUTTON_ENTRANCE;
+        const buttons = [
+            { sprite: this.passButton.sprite, shadow: this.passButton.shadow },
+            { sprite: this.unoButton.sprite, shadow: this.unoButton.shadow },
+        ];
+
+        const btnDelay = botsLandedDelay + arrowCfg.DELAY + arrowCfg.DURATION * 0.5;
+
+        buttons.forEach((btn, i) => {
+            const targetY = btn.sprite.y;
+            const shadowTargetY = btn.shadow.y;
+            btn.sprite.y = targetY + btnCfg.OFFSET_Y;
+            btn.shadow.y = shadowTargetY + btnCfg.OFFSET_Y;
+
+            this.scheduleTimer(btnDelay + i * btnCfg.STAGGER, () => {
+                this.tweens.add({
+                    targets: btn.sprite,
+                    y: targetY,
+                    alpha: 1,
+                    duration: btnCfg.DURATION,
+                    ease: btnCfg.EASE,
+                });
+                this.tweens.add({
+                    targets: btn.shadow,
+                    y: shadowTargetY,
+                    alpha: 0.8,
+                    duration: btnCfg.DURATION,
+                    ease: btnCfg.EASE,
+                });
+            });
+        });
+
+        // After intro UI is in, animate the resumed cards into position
+        const totalIntroTime = btnDelay + buttons.length * btnCfg.STAGGER + btnCfg.DURATION + cfg.DEAL_DELAY;
+        this.scheduleTimer(totalIntroTime, () => {
+            this.setupDragAndDrop();
+            this._animateResumedCards(gameState);
+        });
+    }
+
+    /**
+     * Animate resumed game cards using the real deal flow (sped up).
+     * Uses dealer.dealToPlayer for the deck-pop + slide animation,
+     * then fans out, flips, and deals the discard pile.
+     * @private
+     */
+    _animateResumedCards(gameState) {
+        const FAST_DEAL_DELAY = 60;
+        const FAST_SLIDE = 180;
+
+        // Set up deck totals so visual deck layers update as cards are dealt
+        const allHandCards = gameState.playerHands.reduce((sum, h) =>
+            sum + (typeof h === 'number' ? h : h.length), 0);
+        const discardPile = gameState.discardPile || [];
+        this.deckTotal = gameState.deckRemaining + allHandCards + discardPile.length;
+        this.visualDeck.visualRemaining = this.deckTotal;
+        this.visualDeck.updateLayers(this.visualDeck.visualRemaining, this.deckTotal);
+
+        this.dealer.syncWithVisualDeck();
+
+        const players = this.playerManager.getAllPlayers();
+
+        // Expand bot hands from int to face-down arrays
+        const expandedHands = gameState.playerHands.map(hand =>
+            Array.isArray(hand)
+                ? hand
+                : Array.from({ length: hand }, () => ({ suit: null, value: 'back' }))
+        );
+
+        // Build a flat deal queue: round-robin like the real deal
+        const cardsPerPlayer = Math.max(...expandedHands.map(h => h.length));
+        const dealQueue = [];
+        for (let round = 0; round < cardsPerPlayer; round++) {
+            for (let pi = 0; pi < expandedHands.length; pi++) {
+                if (round < expandedHands[pi].length) {
+                    dealQueue.push({ playerIndex: pi, cardIndex: round });
+                }
+            }
+        }
+
+        // Deal all hands through the dealer with fast stagger
+        let dealtCount = 0;
+        const totalHandCards = dealQueue.length;
+
+        dealQueue.forEach((entry, seqIndex) => {
+            const { playerIndex, cardIndex } = entry;
+            const player = players[playerIndex];
+            const cardData = expandedHands[playerIndex][cardIndex];
+
+            const positions = this.dealer.calculatePositions(
+                player, expandedHands[playerIndex].length, 37, 66,
+            );
+            const targetPos = positions[cardIndex];
+
+            this.scheduleTimer(seqIndex * FAST_DEAL_DELAY, () => {
+                this.dealer.dealToPlayer(player, cardData, targetPos, () => {
+                    dealtCount++;
+                    if (dealtCount === totalHandCards) {
+                        this._onResumeHandsDealt(gameState, discardPile, FAST_DEAL_DELAY);
+                    }
+                }, { slideDuration: FAST_SLIDE });
+            });
+        });
+
+        if (totalHandCards === 0) {
+            this._onResumeHandsDealt(gameState, discardPile, FAST_DEAL_DELAY);
+        }
+    }
+
+    /**
+     * After all hands are dealt during resume: fan out, flip, then deal discard pile.
+     * @private
+     */
+    _onResumeHandsDealt(gameState, discardPile, dealDelay) {
+        const players = this.playerManager.getAllPlayers();
+        const localPlayer = this.playerManager.getLocalPlayer();
+
+        // Fan out other players' cards
+        players.forEach(player => {
+            if (!player.isLocal) {
+                this.dealer.fanOutOtherPlayerCards(player);
+            }
+        });
+
+        // Flip local player cards (fast)
+        localPlayer.cards.forEach((card, index) => {
+            this.scheduleTimer(index * 80, () => {
+                card.flip();
+            });
+        });
+
+        // Fan out local player cards, then deal the discard pile
+        this.scheduleTimer(300, () => {
+            this.dealer.fanOutLocalPlayerCards(localPlayer, () => {
+                localPlayer.cards.forEach(card => card.makeInteractive());
+                this._dealResumeDiscardPile(gameState, discardPile, dealDelay);
+            });
+        });
+    }
+
+    /**
+     * Deal the discard pile cards one by one, then enable gameplay.
+     * @private
+     */
+    _dealResumeDiscardPile(gameState, discardPile, dealDelay) {
+        const zone = DRAG_DROP.PLAY_ZONE;
+        const scatter = DRAG_DROP.PLAY_SCATTER;
+
+        if (discardPile.length === 0) {
+            this._enableResumeGameplay(gameState);
+            return;
+        }
+
+        const deckPos = VisualDeck.getDefaultPosition();
+        const deckDims = ASSET_DIMENSIONS.CARD_DECK;
+        const discardDims = ASSET_DIMENSIONS.CARD;
+        const flyDuration = DRAG_DROP.PLAY_DURATION;
+
+        const DISCARD_BASE_DEPTH = 50;
+
+        discardPile.forEach((cardData, i) => {
+            const isTopCard = i === discardPile.length - 1;
+
+            const targetX = isTopCard
+                ? zone.X
+                : zone.X + Phaser.Math.FloatBetween(-scatter.OFFSET, scatter.OFFSET);
+            const targetY = isTopCard
+                ? zone.Y
+                : zone.Y + Phaser.Math.FloatBetween(-scatter.OFFSET, scatter.OFFSET);
+            const targetRot = isTopCard
+                ? 0
+                : Phaser.Math.FloatBetween(-scatter.ROTATION, scatter.ROTATION);
+
+            // For wild/+4 top card, use the colored texture
+            const isWild = GameLogic.isWildCard(cardData);
+            const faceKey = (isWild && isTopCard && gameState.activeColor)
+                ? `${cardData.value}_${gameState.activeColor}`
+                : (cardData.suit ? `${cardData.value}_${cardData.suit}` : cardData.value);
+
+            this.scheduleTimer(i * dealDelay, () => {
+                this.visualDeck.dealCardAnimation(() => {
+                    // Card spawns as card_back_deck at deck size (constructor defaults)
+                    const card = new Card(
+                        this, deckPos.x, deckPos.y,
+                        cardData.suit, cardData.value, false,
+                    );
+                    card.setDepth(DISCARD_BASE_DEPTH + i);
+
+                    // Flip modifier: 1 = normal, 0 = invisible horizontally
+                    let flipMod = 1;
+
+                    // Main flight tween via progress-based onUpdate
+                    const tweenObj = { t: 0 };
+                    this.tweens.add({
+                        targets: tweenObj,
+                        t: 1,
+                        duration: flyDuration,
+                        ease: 'Power2',
+                        onUpdate: () => {
+                            const p = tweenObj.t;
+                            card.x = Phaser.Math.Linear(deckPos.x, targetX, p);
+                            card.y = Phaser.Math.Linear(deckPos.y, targetY, p);
+                            card.rotation = p * targetRot;
+
+                            const w = Phaser.Math.Linear(deckDims.WIDTH, discardDims.WIDTH, p);
+                            const h = Phaser.Math.Linear(deckDims.HEIGHT, discardDims.HEIGHT, p);
+                            card.displayWidth = w * Math.abs(flipMod);
+                            card.displayHeight = h;
+                        },
+                        onComplete: () => {
+                            card.setDisplaySize(discardDims.WIDTH, discardDims.HEIGHT);
+                            card.x = targetX;
+                            card.y = targetY;
+                            card.rotation = targetRot;
+                            // Settle at depth 2 to match playToCenter behavior
+                            card.setDepth(2);
+                            if (!card.isFaceUp) {
+                                card.setTexture(faceKey);
+                                card.isFaceUp = true;
+                            }
+                            card.baseScaleX = card.scaleX;
+                            card.baseScaleY = card.scaleY;
+                            this.discardPile.push(card);
+                            if (isTopCard) {
+                                this._enableResumeGameplay(gameState);
+                            }
+                        },
+                    });
+
+                    // Mid-flight flip: shrink → swap texture → expand
+                    const flipDelay = Math.round(flyDuration * 0.25);
+                    this.scheduleTimer(flipDelay, () => {
+                        if (!card.scene) return;
+                        // Phase 1: compress to 0
+                        const flipObj = { val: 1 };
+                        this.tweens.add({
+                            targets: flipObj,
+                            val: 0,
+                            duration: ANIMATION.FLIP_DURATION,
+                            ease: 'Linear',
+                            onUpdate: () => { flipMod = flipObj.val; },
+                            onComplete: () => {
+                                card.setTexture(faceKey);
+                                card.isFaceUp = true;
+                                // Phase 2: expand back
+                                const expandObj = { val: 0 };
+                                this.tweens.add({
+                                    targets: expandObj,
+                                    val: 1,
+                                    duration: ANIMATION.FLIP_DURATION,
+                                    ease: 'Linear',
+                                    onUpdate: () => { flipMod = expandObj.val; },
+                                });
+                            },
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    /**
+     * Re-enable menu and player turn after resume animation completes.
+     * @private
+     */
+    _enableResumeGameplay(gameState) {
+        this.menuIcon.setInteractive({ useHandCursor: true });
+        this.passButton.enable();
+        if (gameState.currentPlayer === 0) {
+            this.enablePlayerTurn();
+        } else {
+            this.disablePlayerTurn();
+        }
+    }
+
     /**
      * Animate the starter discard card from deck to play zone center.
      * Card data was already determined by the simulator.
@@ -789,11 +1183,9 @@ export class GameScene extends Phaser.Scene {
             );
         });
 
-        // If starter is a wild, let the player choose a color
-        if (GameLogic.isWildCard(starterCardData)) {
-            const chosenColor = await ColorPicker.show(this, starterCardData.value);
-            this.activeColor = chosenColor;
-            await this._animateColorReplacement(card, starterCardData.value, chosenColor);
+        // If starter is a wild, show the server-assigned color (no player choice)
+        if (GameLogic.isWildCard(starterCardData) && this.activeColor) {
+            await this._animateColorReplacement(card, starterCardData.value, this.activeColor);
         }
 
         if (onComplete) onComplete();
@@ -1065,11 +1457,19 @@ export class GameScene extends Phaser.Scene {
             const result = await this.gameAdapter.playerPlay(cardData, chosenColor);
 
             if (!result.valid) {
-                this._reversePlayedCard(card, player);
-                ErrorPopup.show(this, "Nice try! That card doesn't match.");
-                this.enablePlayerTurn();
+                if (this._isStateDesynced(result)) {
+                    // Don't reverse the card — resync will destroy all cards and rebuild
+                    ErrorPopup.show(this, 'Cards out of sync! Refreshing...');
+                    this._resyncFromServer(result);
+                } else {
+                    this._reversePlayedCard(card, player);
+                    ErrorPopup.show(this, "Nice try! That card doesn't match.");
+                    this.enablePlayerTurn();
+                }
                 return;
             }
+
+
 
             // Sync state from response
             this.topCard = result.topCard;
@@ -1102,13 +1502,19 @@ export class GameScene extends Phaser.Scene {
             };
 
             if (effect.type === 'reverse') {
-                this.isClockwise = result.isClockwise;
+                // Toggle locally for the player's reverse; bot reverses handled by MoveExecutor.
+                // syncState() at the end will set the final server value.
+                this.isClockwise = !this.isClockwise;
                 this.directionArrow.toggle(() => proceedAfterEffect());
             } else {
-                this.isClockwise = result.isClockwise;
                 proceedAfterEffect();
             }
         } catch (err) {
+            // Game no longer exists (abandoned/finished) — try to resync to active game
+            if (err.status === 400 || err.status === 404) {
+                this._recoverStaleGame();
+                return;
+            }
             this._reversePlayedCard(card, player);
             ErrorPopup.show(this, ErrorPopup.friendlyMessage(err));
             this.enablePlayerTurn();
@@ -1120,12 +1526,29 @@ export class GameScene extends Phaser.Scene {
      * Used when the server rejects a play or a network error occurs.
      */
     _reversePlayedCard(card, player) {
+        // Guard: if the card was already destroyed, nothing to reverse
+        if (!card || !card.scene) return;
+
         // Remove from discard pile if it was added
         const discardIdx = this.discardPile.indexOf(card);
         if (discardIdx !== -1) this.discardPile.splice(discardIdx, 1);
 
         // Re-add to player hand
         player.addCard(card);
+
+        // Restore wild/plus4 to uncolored texture (color replacement may have changed it)
+        if (!card.suit && card.cardFaceKey !== card.value) {
+            card.cardFaceKey = card.value;
+            card.setTexture(card.cardFaceKey);
+        }
+
+        // Restore player card size (playToCenter shrinks to discard pile size)
+        card.setTargetSize(CARD_SCALE.INITIAL);
+        card.baseScaleX = card.scaleX;
+        card.baseScaleY = card.scaleY;
+
+        // Restore interactivity (playToCenter removes it)
+        card.makeInteractive();
 
         // Quick shake at current position, then refan to correct slot
         this.tweens.killTweensOf(card);
@@ -1139,6 +1562,186 @@ export class GameScene extends Phaser.Scene {
                 this.refanCards(player);
             }
         });
+    }
+
+    /**
+     * Check if the local state has drifted from the server state.
+     * Compares human hand cards, bot hand counts, and discard pile.
+     */
+    _isStateDesynced(serverResult) {
+        const serverHands = serverResult.playerHands;
+        if (!serverHands) return false;
+
+        const players = this.playerManager.getAllPlayers();
+
+        // Check player hands
+        for (let i = 0; i < serverHands.length; i++) {
+            const serverHand = serverHands[i];
+            const player = players[i];
+            if (!player) continue;
+
+            if (player.isLocal) {
+                const localCards = player.cards.map(c => `${c.suit}_${c.value}`).sort();
+                const serverCards = serverHand.map(c => `${c.suit}_${c.value}`).sort();
+                if (localCards.length !== serverCards.length) return true;
+                for (let j = 0; j < localCards.length; j++) {
+                    if (localCards[j] !== serverCards[j]) return true;
+                }
+            } else {
+                const serverCount = typeof serverHand === 'number' ? serverHand : serverHand.length;
+                if (player.cards.length !== serverCount) return true;
+            }
+        }
+
+        // Check discard pile count
+        const serverDiscard = serverResult.discardPile || [];
+        if (this.discardPile.length !== serverDiscard.length) return true;
+
+        // Check top card matches
+        if (serverResult.topCard) {
+            const st = serverResult.topCard;
+            if (!this.topCard || this.topCard.suit !== st.suit || this.topCard.value !== st.value) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Re-sync all player hands and discard pile from server state.
+     * Animates all cards flying back to the deck, then re-deals via the resume pipeline.
+     */
+    _resyncFromServer(serverResult) {
+        // Disable interaction during resync
+        this.disablePlayerTurn();
+        this.moveExecutor.cancel();
+        [...this.phantoms].forEach(p => p.destroy());
+        this.phantoms = [];
+
+        // Sync game state
+        this.topCard = serverResult.topCard;
+        this.activeColor = serverResult.activeColor;
+        const directionChanged = this.isClockwise !== serverResult.isClockwise;
+        this.isClockwise = serverResult.isClockwise;
+
+        // Sync direction arrow with animation if changed
+        if (directionChanged) {
+            this.directionArrow.toggle();
+        }
+
+        // Collect all card sprites from hands + discard pile
+        const players = this.playerManager.getAllPlayers();
+        const allCards = [];
+        players.forEach(player => {
+            player.cards.forEach(card => {
+                if (card.scene) {
+                    card.removeInteractive();
+                    card.removeAllListeners();
+                    allCards.push(card);
+                }
+            });
+        });
+        this.discardPile.forEach(card => {
+            if (card.scene) allCards.push(card);
+        });
+
+        // Animate gather → re-deal
+        this._gatherAllCardsToDeck(allCards, () => {
+            // Clear data arrays (sprites already destroyed by gather)
+            players.forEach(p => { p.cards = []; });
+            this.discardPile = [];
+
+            // Replenish visual deck
+            this._replenishVisualDeck(serverResult.deckRemaining);
+
+            // Build gameState for the resume pipeline
+            const gameState = {
+                playerHands: serverResult.playerHands,
+                discardPile: serverResult.discardPile || [],
+                deckRemaining: serverResult.deckRemaining,
+                currentPlayer: serverResult.currentPlayer,
+                activeColor: serverResult.activeColor,
+            };
+
+            this.scheduleTimer(RESYNC.PAUSE_BEFORE_DEAL, () => {
+                this._animateResumedCards(gameState);
+            });
+        });
+    }
+
+    /**
+     * Gather all card sprites toward the deck and destroy them.
+     * @param {Card[]} cards - all Card sprites to collect
+     * @param {Function} callback - called after all cards gathered
+     * @private
+     */
+    _gatherAllCardsToDeck(cards, callback) {
+        if (cards.length === 0) {
+            callback();
+            return;
+        }
+
+        const deckPos = this.visualDeck.getDeckPosition();
+        let gathered = 0;
+
+        cards.forEach((card, i) => {
+            this.tweens.killTweensOf(card);
+
+            this.tweens.add({
+                targets: card,
+                x: deckPos.x,
+                y: deckPos.y,
+                scaleX: card.scaleX * 0.3,
+                scaleY: card.scaleY * 0.3,
+                alpha: 0.4,
+                rotation: 0,
+                duration: RESYNC.GATHER_DURATION,
+                delay: Math.min(i, 10) * RESYNC.GATHER_STAGGER,
+                ease: 'Power3',
+                onComplete: () => {
+                    card.destroy();
+                    gathered++;
+                    if (gathered >= cards.length) {
+                        callback();
+                    }
+                },
+            });
+        });
+    }
+
+    /**
+     * Recover from a stale game ID (400/404).
+     * Checks for an active game on the server and resyncs, or restarts fresh.
+     * @private
+     */
+    async _recoverStaleGame() {
+        this.disablePlayerTurn();
+
+        try {
+            const result = await this.gameAdapter.checkActiveGame();
+
+            if (result.hasActiveGame && result.gameState) {
+                ErrorPopup.show(this, 'Game changed! Syncing...');
+                // Build a resync-compatible result from the active game state
+                const gs = result.gameState;
+                this._resyncFromServer({
+                    playerHands: gs.playerHands,
+                    discardPile: gs.discardPile || [],
+                    topCard: gs.topCard,
+                    activeColor: gs.activeColor,
+                    isClockwise: gs.isClockwise,
+                    deckRemaining: gs.deckRemaining,
+                    currentPlayer: gs.currentPlayer,
+                });
+            } else {
+                ErrorPopup.show(this, 'Game session ended. Starting fresh...');
+                this.scheduleTimer(1500, () => this.handleRestart());
+            }
+        } catch (_) {
+            ErrorPopup.show(this, 'Connection lost. Restarting...');
+            this.scheduleTimer(1500, () => this.handleRestart());
+        }
     }
 
     /**
@@ -1288,6 +1891,10 @@ export class GameScene extends Phaser.Scene {
         try {
             result = await this.gameAdapter.playerPass();
         } catch (err) {
+            if (err.status === 400 || err.status === 404) {
+                this._recoverStaleGame();
+                return;
+            }
             ErrorPopup.show(this, ErrorPopup.friendlyMessage(err));
             this.enablePlayerTurn();
             return;
@@ -1393,13 +2000,12 @@ export class GameScene extends Phaser.Scene {
         }
         // Penalty cards → victim reacts with angry/cry/sad
         if (effect.type === 'reverse') {
-            this.isR = !this.isR;
-            // Reverse: the player who would have been next (before direction flipped)
-            const prev = GameLogic.getNextPlayerIndex(playerIndex, !this.isR);
-            this.emoteSystem.playEmote(prev, randomNeg());
+            // Reverse: the victim is who would have been next BEFORE the direction flipped
+            const victim = GameLogic.getNextPlayerIndex(playerIndex, this.isClockwise);
+            this.emoteSystem.playEmote(victim, randomNeg());
         } else if (effect.type !== 'none') {
             // Plus2, plus4, skip: next player reacts
-            const next = GameLogic.getNextPlayerIndex(playerIndex, this.isR);
+            const next = GameLogic.getNextPlayerIndex(playerIndex, this.isClockwise);
             this.emoteSystem.playEmote(next, randomNeg());
         }
     }

@@ -17,7 +17,7 @@ export class Player {
     }
 
     clearCards() {
-        this.cards.forEach(card => card.destroy());
+        this.cards.forEach(card => { if (card.scene) card.destroy(); });
         this.cards = [];
     }
 

@@ -9,7 +9,7 @@ export class DirectionArrow {
         const { X, Y, DEPTH, ALPHA } = DIRECTION_ARROW;
         const { WIDTH, HEIGHT } = ASSET_DIMENSIONS.ARROW;
 
-        this.sprite = scene.add.image(X, Y, 'arrow');
+        this.sprite = scene.add.image(X, Y, 'r_arrow');
         this.sprite.setDisplaySize(WIDTH, HEIGHT);
         this.sprite.setDepth(DEPTH);
         this.sprite.setAlpha(ALPHA);
@@ -19,7 +19,7 @@ export class DirectionArrow {
 
     startIdle() {
         const { DURATION } = DIRECTION_ARROW.IDLE_SPIN;
-        const direction = this.isClockwise ? -360 : 360;
+        const direction = this.isClockwise ? 360 : -360;
 
         this.idleSpinTween = this.scene.tweens.add({
             targets: this.sprite,
@@ -65,7 +65,7 @@ export class DirectionArrow {
         this.stopIdle();
 
         this.isClockwise = isClockwise;
-        this.sprite.setTexture(isClockwise ? 'arrow' : 'r_arrow');
+        this.sprite.setTexture(isClockwise ? 'r_arrow' : 'arrow');
         this.sprite.setAngle(0);
         this.startIdle();
     }
@@ -80,8 +80,8 @@ export class DirectionArrow {
         const baseScaleX = WIDTH / this.sprite.texture.getSourceImage().width;
         const baseScaleY = HEIGHT / this.sprite.texture.getSourceImage().height;
 
-        // Spin direction: positive for clockwise arrow, negative for reverse arrow
-        const spinSign = nextClockwise ? 1 : -1;
+        // Spin direction: positive for clockwise, negative for counter-clockwise
+        const spinSign = nextClockwise ? -1 : 1;
 
         // Shrink + spin out
         this.scene.tweens.add({
@@ -94,7 +94,7 @@ export class DirectionArrow {
             onComplete: () => {
                 // Swap texture
                 this.isClockwise = nextClockwise;
-                this.sprite.setTexture(this.isClockwise ? 'arrow' : 'r_arrow');
+                this.sprite.setTexture(this.isClockwise ? 'r_arrow' : 'arrow');
 
                 // Grow + spin in (opposite direction)
                 this.scene.tweens.add({

@@ -1,6 +1,7 @@
 import { loadMainScreenAssets, MENU_CARD_KEYS } from '../utils/assetLoader.js';
 import { ASSET_DIMENSIONS } from '../config/assetDimensions.js';
-import { MAIN_MENU } from '../config/settings.js';
+import { MAIN_MENU, API_BASE_URL } from '../config/settings.js';
+import { ApiClient } from '../api/ApiClient.js';
 
 const FORM_CSS = `
     .uno-form-container {
@@ -13,6 +14,7 @@ const FORM_CSS = `
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5),
                     inset 0 1px 0 rgba(120, 180, 255, 0.08),
                     0 0 40px rgba(30, 80, 180, 0.15);
+        touch-action: manipulation;
     }
     .uno-form-title {
         color: #FFFFFF;
@@ -46,6 +48,7 @@ const FORM_CSS = `
         transition: border-color 0.25s, box-shadow 0.25s;
         box-sizing: border-box;
         font-family: inherit;
+        touch-action: manipulation;
     }
     .uno-form-input::placeholder {
         color: rgba(160, 195, 240, 0.35);
@@ -195,6 +198,139 @@ export class MainMenuScene extends Phaser.Scene {
             btn.setDepth(FLOATING_CARDS.DEPTH + 1);
             btn.setData('baseY', BUTTONS.Y);
             this.menuButtons.push(btn);
+        });
+
+        // Try auto-login from saved session
+        this.tryAutoLogin();
+    }
+
+    async tryAutoLogin() {
+        ApiClient.setBaseUrl(API_BASE_URL);
+
+        if (!ApiClient.isAuthenticated()) {
+            ApiClient.restoreTokens();
+        }
+        if (!ApiClient.isAuthenticated()) return;
+
+        this.showSystemToast('Signing in...');
+
+        try {
+            const profile = await ApiClient.get('/api/users/me');
+            ApiClient._saveUsername(profile.username);
+            this.dismissSystemToast();
+            this.showSystemToast(`Welcome back, ${profile.username}!`);
+            this.time.delayedCall(1200, () => this.scene.start('GameScene'));
+        } catch (_) {
+            try {
+                await ApiClient.refreshAccessToken();
+                const profile = await ApiClient.get('/api/users/me');
+                ApiClient._saveUsername(profile.username);
+                this.dismissSystemToast();
+                this.showSystemToast(`Welcome back, ${profile.username}!`);
+                this.time.delayedCall(1200, () => this.scene.start('GameScene'));
+            } catch (__) {
+                ApiClient.clearTokens();
+                this.dismissSystemToast();
+            }
+        }
+    }
+
+    /**
+     * Show a toast-style system message (same layout as ErrorPopup but themed for info).
+     */
+    showSystemToast(message) {
+        this.dismissSystemToast();
+
+        const centerX = this.cameras.main.width / 2;
+        const centerY = 340;
+        const W = 500;
+        const H = 90;
+        const R = 18;
+
+        const container = this.add.container(centerX, centerY);
+        container.setDepth(200);
+        container.setAlpha(0);
+        container.setScale(0);
+
+        // Background panel — dark blue with teal border
+        const bg = this.add.graphics();
+        bg.fillStyle(0x0a1a2e, 0.92);
+        bg.fillRoundedRect(-W / 2, -H / 2, W, H, R);
+        bg.lineStyle(2, 0x40c8e0, 0.7);
+        bg.strokeRoundedRect(-W / 2, -H / 2, W, H, R);
+        container.add(bg);
+
+        // Spinner dots (inline before text)
+        const dotContainer = this.add.container(0, 0);
+        const isLoading = message.includes('...');
+        if (isLoading) {
+            const dotGap = 18;
+            const dotsStartX = -dotGap;
+            for (let i = 0; i < 3; i++) {
+                const dot = this.add.circle(dotsStartX + i * dotGap, -18, 6, 0x40c8e0);
+                dot.setAlpha(0.3);
+                dotContainer.add(dot);
+                this.tweens.add({
+                    targets: dot,
+                    alpha: 1,
+                    scaleX: 1.3,
+                    scaleY: 1.3,
+                    duration: 350,
+                    yoyo: true,
+                    repeat: -1,
+                    delay: i * 140,
+                    ease: 'Sine.easeInOut',
+                });
+            }
+        }
+        container.add(dotContainer);
+
+        // Message text
+        const text = this.add.text(0, isLoading ? 14 : 0, message, {
+            fontFamily: "'Segoe UI', system-ui, sans-serif",
+            fontSize: '26px',
+            fontStyle: 'bold',
+            color: '#e0f0ff',
+            align: 'center',
+            wordWrap: { width: W - 50 },
+        }).setOrigin(0.5);
+        container.add(text);
+
+        this._systemToast = container;
+
+        // Bounce-in animation
+        this.tweens.add({
+            targets: container,
+            alpha: 1,
+            scaleX: 1.08,
+            scaleY: 1.08,
+            duration: 200,
+            ease: 'Back.easeOut',
+            onComplete: () => {
+                this.tweens.add({
+                    targets: container,
+                    scaleX: 1,
+                    scaleY: 1,
+                    duration: 120,
+                    ease: 'Sine.easeOut',
+                });
+            },
+        });
+    }
+
+    dismissSystemToast() {
+        const container = this._systemToast;
+        if (!container) return;
+        this._systemToast = null;
+
+        this.tweens.add({
+            targets: container,
+            alpha: 0,
+            scaleY: 0.8,
+            y: container.y - 20,
+            duration: 250,
+            ease: 'Sine.easeIn',
+            onComplete: () => container.destroy(),
         });
     }
 
@@ -413,6 +549,16 @@ export class MainMenuScene extends Phaser.Scene {
             }
         });
 
+        // On mobile, scroll input into view after virtual keyboard opens
+        const formNode = this.formDom.node;
+        formNode.querySelectorAll('.uno-form-input').forEach(input => {
+            input.addEventListener('focus', () => {
+                setTimeout(() => {
+                    input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 300);
+            });
+        });
+
         this.formDom.addListener('keydown');
         this.formDom.on('keydown', (e) => {
             if (e.key === 'Enter') {
@@ -546,7 +692,26 @@ export class MainMenuScene extends Phaser.Scene {
         });
     }
 
-    handleFormSubmit(type) {
+    _friendlyFormError(err, isSignIn) {
+        // Network / timeout
+        if (err.code === 'NETWORK_ERROR') {
+            return err.name === 'AbortError' || err.message?.includes('timed out')
+                ? 'Connection timed out. Please try again.'
+                : 'Cannot reach server. Check your connection.';
+        }
+        // HTTP status-based messages
+        const status = err.status || 0;
+        if (status === 401) return 'Incorrect email or password.';
+        if (status === 409) return 'An account with this email already exists.';
+        if (status === 422) return 'Please check your email and password format.';
+        if (status === 429) return 'Too many attempts. Please wait a moment.';
+        if (status >= 500) return 'Server error. Please try again later.';
+        // Fallback: use server message if it's short enough, otherwise generic
+        if (err.message && err.message.length < 80) return err.message;
+        return isSignIn ? 'Sign in failed. Please try again.' : 'Registration failed. Please try again.';
+    }
+
+    async handleFormSubmit(type) {
         const isSignIn = type === 'signin';
         const email = this.formDom.getChildByID('input-email')?.value?.trim();
         const password = this.formDom.getChildByID('input-password')?.value?.trim();
@@ -555,7 +720,6 @@ export class MainMenuScene extends Phaser.Scene {
 
         if (!email || !password || (!isSignIn && !name)) {
             if (errorEl) errorEl.textContent = 'Please fill in all fields';
-            // Shake the form
             const startX = this.formDom.x;
             this.tweens.add({
                 targets: this.formDom,
@@ -569,7 +733,42 @@ export class MainMenuScene extends Phaser.Scene {
             return;
         }
 
-        console.log(`[${type}]`, { name, email });
-        this.scene.start('GameScene');
+        // Disable submit button while loading
+        const submitBtn = this.formDom.getChildByID('btn-submit');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Loading...';
+        }
+        if (errorEl) errorEl.textContent = '';
+
+        try {
+            ApiClient.setBaseUrl(API_BASE_URL);
+
+            if (isSignIn) {
+                await ApiClient.login(email, password);
+            } else {
+                await ApiClient.register(email, password, name);
+            }
+
+            this.scene.start('GameScene');
+        } catch (err) {
+            const msg = this._friendlyFormError(err, isSignIn);
+            if (errorEl) errorEl.textContent = msg;
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = isSignIn ? "Let's Go!" : 'Deal Me In!';
+            }
+            // Shake form on error
+            const startX = this.formDom.x;
+            this.tweens.add({
+                targets: this.formDom,
+                x: startX - 8,
+                duration: 50,
+                yoyo: true,
+                repeat: 3,
+                ease: 'Sine.easeInOut',
+                onComplete: () => { this.formDom.x = startX; },
+            });
+        }
     }
 }
