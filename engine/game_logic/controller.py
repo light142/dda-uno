@@ -5,7 +5,7 @@ bot strength (make bots harder). If losing too much, decrease strength
 (make bots easier).
 """
 
-from config.controller import (
+from engine.config.controller import (
     TARGET_WIN_RATE, ADJUSTMENT_STEP,
     STRENGTH_MIN, STRENGTH_MAX, INITIAL_STRENGTH,
 )

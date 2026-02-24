@@ -8,7 +8,7 @@ Represents a player who knows the rules but doesn't think ahead.
 import random
 import numpy as np
 
-from game_logic.agents.base import BaseAgent
+from engine.game_logic.agents.base import BaseAgent
 
 
 class NoobBot(BaseAgent):

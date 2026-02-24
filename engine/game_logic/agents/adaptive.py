@@ -2,9 +2,9 @@
 
 import random
 
-from game_logic.agents.base import BaseAgent
-from game_logic.agents.rl_agent import RLAgent
-from config.controller import INITIAL_STRENGTH
+from engine.game_logic.agents.base import BaseAgent
+from engine.game_logic.agents.rl_agent import RLAgent
+from engine.config.controller import INITIAL_STRENGTH
 
 
 class AdaptiveAgent(BaseAgent):

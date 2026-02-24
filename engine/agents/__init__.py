@@ -1,3 +1,1 @@
-from engine.agents.base import BaseAgent
-from engine.agents.rl_agent import RLAgent
-from engine.agents.adaptive import AdaptiveAgent
+from engine.game_logic.agents import BaseAgent, RLAgent, AdaptiveAgent

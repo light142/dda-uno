@@ -1,6 +1,6 @@
-from simulation.bots.noob import NoobBot
-from simulation.bots.casual import CasualBot
-from simulation.bots.pro import ProBot
+from engine.game_logic.bots.noob import NoobBot
+from engine.game_logic.bots.casual import CasualBot
+from engine.game_logic.bots.pro import ProBot
 
 
 def get_bot(name: str):

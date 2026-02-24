@@ -9,7 +9,7 @@ import json
 import sqlite3
 from typing import Optional
 
-from config.controller import INITIAL_STRENGTH, TARGET_WIN_RATE
+from engine.config.controller import INITIAL_STRENGTH, TARGET_WIN_RATE
 
 
 # --- Data model ---

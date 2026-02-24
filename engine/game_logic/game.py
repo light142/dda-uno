@@ -6,9 +6,62 @@ at each seat. Used by training, simulation, and the API layer.
 
 import rlcard
 from rlcard.games.uno.game import UnoGame as RLCardUnoGame
+from rlcard.games.uno.round import UnoRound
+from rlcard.games.uno.card import UnoCard
 from rlcard.utils import reorganize
 
-from config.game import NUM_PLAYERS, PLAYER_SEAT, NUM_ACTIONS, SEED
+from engine.config.game import NUM_PLAYERS, PLAYER_SEAT, NUM_ACTIONS, SEED
+
+
+# ---------------------------------------------------------------------------
+# RLCard bug fix: auto-played wild_draw_4 from a draw has no penalty.
+#
+# In RLCard's _perform_draw_action, drawn wild cards (including wild_draw_4)
+# are auto-played but only set the target — _preform_non_number_action is
+# never called, so the next player does NOT receive 4 penalty cards.
+#
+# This patch makes wild_draw_4 call _preform_non_number_action just like
+# it does when played from hand, so the penalty is correctly applied.
+# ---------------------------------------------------------------------------
+
+def _patched_perform_draw_action(self, players):
+    if not self.dealer.deck:
+        self.replace_deck()
+
+    card = self.dealer.deck.pop()
+
+    if card.type == 'wild':
+        card.color = self.np_random.choice(UnoCard.info['color'])
+        self.played_cards.append(card)
+        if card.trait == 'wild_draw_4':
+            # Must call _preform_non_number_action to deal 4 cards
+            # and skip the penalized player (original code skips this).
+            self._preform_non_number_action(players, card)
+        else:
+            self.target = card
+            self.current_player = (
+                self.current_player + self.direction
+            ) % self.num_players
+
+    elif card.color == self.target.color:
+        if card.type == 'number':
+            self.target = card
+            self.played_cards.append(card)
+            self.current_player = (
+                self.current_player + self.direction
+            ) % self.num_players
+        else:
+            self.played_cards.append(card)
+            self._preform_non_number_action(players, card)
+
+    else:
+        players[self.current_player].hand.append(card)
+        self.current_player = (
+            self.current_player + self.direction
+        ) % self.num_players
+
+
+UnoRound._perform_draw_action = _patched_perform_draw_action
 
 
 class UnoGame:

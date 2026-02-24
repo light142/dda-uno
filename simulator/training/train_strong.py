@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from rlcard.agents import RandomAgent
 from rlcard.models import load as load_model
 
-from simulator.game import UnoGame
-from engine.agents import RLAgent
+from engine.game_logic.game import UnoGame
+from engine.game_logic.agents import RLAgent
 from engine.config.game import NUM_PLAYERS, NUM_ACTIONS, BOT_SEATS
 from simulator.config.training import (
     SEAT0_OPPONENT, NUM_EPISODES, EVAL_EVERY, EVAL_NUM_GAMES,

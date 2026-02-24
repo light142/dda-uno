@@ -17,6 +17,8 @@ import numpy as np
 from collections import OrderedDict
 from typing import Optional
 
+from rlcard.games.uno.card import UnoCard
+
 from .cards import Card, is_wild, is_valid_play
 
 # ---------------------------------------------------------------------------
@@ -199,3 +201,37 @@ def _card_to_rl_key(card: Card, active_color: str = None) -> Optional[str]:
             return None
 
     return f"{rl_color}-{rl_value}"
+
+
+# ---------------------------------------------------------------------------
+# RLCard UnoCard <-> API Card conversion
+# ---------------------------------------------------------------------------
+
+def rlcard_card_to_api(rlcard_card: UnoCard) -> Card:
+    """Convert RLCard UnoCard to API Card.
+
+    RLCard UnoCard has .type ('number','action','wild'), .color ('r','g','b','y'),
+    .trait ('0'-'9','skip','reverse','draw_2','wild','wild_draw_4').
+    """
+    api_value = RL_TO_VALUE.get(rlcard_card.trait, rlcard_card.trait)
+    if rlcard_card.type == 'wild':
+        return Card(suit=None, value=api_value)
+    else:
+        api_color = RL_TO_COLOR.get(rlcard_card.color)
+        return Card(suit=api_color, value=api_value)
+
+
+def api_card_to_rlcard(card: Card, active_color: Optional[str] = None) -> UnoCard:
+    """Convert API Card to RLCard UnoCard.
+
+    For wild cards, active_color sets the .color attribute on the UnoCard.
+    """
+    rl_trait = VALUE_TO_RL.get(card.value, card.value)
+
+    if card.value in ("wild", "plus4"):
+        rl_color = COLOR_TO_RL.get(active_color, "r") if active_color else "r"
+        return UnoCard("wild", rl_color, rl_trait)
+    else:
+        rl_color = COLOR_TO_RL.get(card.suit, "r")
+        card_type = "number" if card.value.isdigit() else "action"
+        return UnoCard(card_type, rl_color, rl_trait)

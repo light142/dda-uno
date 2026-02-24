@@ -23,9 +23,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from rlcard.agents import RandomAgent
 
-from simulator.game import UnoGame
-from engine.controller import WinRateController
-from simulator.store import PlayerStore, PlayerStats
+from engine.game_logic.game import UnoGame
+from engine.game_logic.controller import WinRateController
+from engine.game_logic.store import PlayerStore, PlayerStats
 from engine.config.game import NUM_PLAYERS, NUM_ACTIONS, BOT_SEATS, PLAYER_SEAT
 from simulator.config.simulation import (
     NUM_GAMES, SEAT0_BOT, MODEL_DIR,
@@ -114,8 +114,8 @@ def run_adaptive(num_games: int, bot_name: str) -> dict:
     Returns:
         dict with win rates, strength history, convergence data.
     """
-    from simulator.simulation.bots import get_bot
-    from engine.agents import AdaptiveAgent
+    from engine.game_logic.bots import get_bot
+    from engine.game_logic.agents import AdaptiveAgent
 
     print(f"Running ADAPTIVE simulation ({num_games} games)")
     print(f"  Player (seat 0): {bot_name} bot")

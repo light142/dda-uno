@@ -8,7 +8,7 @@ strategy but doesn't track opponents' cards.
 
 import random
 
-from game_logic.agents.base import BaseAgent
+from engine.game_logic.agents.base import BaseAgent
 
 
 # Card value scores (higher = play first to reduce hand value)

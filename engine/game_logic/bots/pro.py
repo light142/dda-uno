@@ -8,7 +8,7 @@ colors based on hand composition, and manages wild cards carefully.
 import random
 from collections import Counter
 
-from engine.agents import BaseAgent
+from engine.game_logic.agents.base import BaseAgent
 
 
 class ProBot(BaseAgent):

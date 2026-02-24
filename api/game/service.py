@@ -1,5 +1,5 @@
 """
-Game service — orchestrates UnoGameEngine + BotManager + DB persistence.
+Game service — orchestrates GameSession + BotManager + DB persistence.
 
 Handles game lifecycle: create, play, pass, get state.
 Adjusts bot difficulty per-player after each finished game.
@@ -14,9 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import User, Game
 from config import get_settings
-from .engine import UnoGameEngine
+from .session import GameSession
 from .bot_manager import BotManager
 from .cards import Card
+from .rlcard_bridge import api_card_to_rlcard
 from .schemas import (
     CardSchema,
     BotTurnSchema,
@@ -42,9 +43,9 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _build_game_state(game: Game, engine: UnoGameEngine) -> GameStateSchema:
-    """Build a GameStateSchema from a Game row and live engine."""
-    state = engine.get_state_for_player(0)
+def _build_game_state(game: Game, session: GameSession) -> GameStateSchema:
+    """Build a GameStateSchema from a Game row and live session."""
+    state = session.get_state_for_player(0)
     return GameStateSchema(
         gameId=game.id,
         status=game.status,
@@ -54,7 +55,7 @@ def _build_game_state(game: Game, engine: UnoGameEngine) -> GameStateSchema:
         activeColor=state["activeColor"],
         isClockwise=state["isClockwise"],
         deckRemaining=state["deckRemaining"],
-        currentPlayer=engine.current_player,
+        currentPlayer=session.current_player,
         winner=state["winner"],
     )
 
@@ -90,7 +91,7 @@ def _model_info() -> ModelInfoSchema:
 
 
 def _make_decision_fn(agents: list, use_models: bool):
-    """Create a bot decision callback for the engine."""
+    """Create a bot decision callback for the session."""
     def decide(player_index: int, hand: list[Card],
                top_card: Card, active_color: str):
         if use_models and agents:
@@ -100,45 +101,51 @@ def _make_decision_fn(agents: list, use_models: bool):
     return decide
 
 
-def _apply_debug_cards(engine: UnoGameEngine, debug: dict):
-    """Override engine state with debug card configuration."""
+def _apply_debug_cards(session: GameSession, debug: dict):
+    """Override session state with debug card configuration.
+
+    Manipulates RLCard game internals through the session.
+    """
+    game = session._game
+
     # Override starter card
     sc = debug["starterCard"]
     starter = Card(suit=sc["suit"], value=sc["value"])
-    engine.top_card = starter
-    engine.discard_pile = [Card(suit=starter.suit, value=starter.value)]
-    engine.active_color = debug.get("activeColor") or starter.suit or "red"
+    active_color = debug.get("activeColor") or starter.suit or "red"
+    game.round.target = api_card_to_rlcard(starter, active_color)
+    game.round.played_cards = [api_card_to_rlcard(starter, active_color)]
 
     # Override player hands if provided
     player_hands = debug.get("playerHands")
     if player_hands:
         # Return current hand cards to deck
-        for hand in engine.hands:
-            engine.deck.cards.extend(hand)
-        engine.hands = []
-        for hand_data in player_hands:
-            hand = []
+        for player in game.players:
+            game.dealer.deck.extend(player.hand)
+            player.hand = []
+
+        for i, hand_data in enumerate(player_hands):
+            if i >= len(game.players):
+                break
             for c in hand_data:
                 card = Card(suit=c["suit"], value=c["value"])
+                rl_card = api_card_to_rlcard(card, active_color)
                 # Remove from deck if present (keep totals consistent)
                 idx = next(
-                    (i for i, dc in enumerate(engine.deck.cards)
-                     if dc.suit == card.suit and dc.value == card.value),
+                    (j for j, dc in enumerate(game.dealer.deck)
+                     if dc.color == rl_card.color and dc.trait == rl_card.trait),
                     None,
                 )
                 if idx is not None:
-                    engine.deck.cards.pop(idx)
-                hand.append(card)
-            engine.hands.append(hand)
-        # Pad to 4 players if fewer hands given
-        while len(engine.hands) < engine.num_players:
-            engine.hands.append([])
-        # Fill each hand up to 7 cards by drawing from the deck
-        for hand in engine.hands:
-            while len(hand) < 7 and engine.deck.cards:
-                hand.append(engine.deck.draw())
+                    game.dealer.deck.pop(idx)
+                game.players[i].hand.append(rl_card)
 
-    engine.current_player = 0
+        # Fill each hand up to 7 cards by drawing from the deck
+        for player in game.players:
+            while len(player.hand) < 7 and game.dealer.deck:
+                player.hand.append(game.dealer.deck.pop())
+
+    game.round.current_player = 0
+    session.current_player = 0
 
 
 # ── Debug cards ──────────────────────────────────────────────────────────
@@ -190,31 +197,31 @@ async def create_game(user: User, db: AsyncSession) -> StartGameResponse:
         active_game.status = "abandoned"
         active_game.finished_at = _utcnow()
 
-    # Create engine and start game
-    engine = UnoGameEngine()
-    engine.start_game()
+    # Create session and start game
+    session = GameSession()
+    session.start_game()
 
     # Apply debug card overrides if set
     debug = _debug_cards.get(user.id)
     if debug:
-        _apply_debug_cards(engine, debug)
+        _apply_debug_cards(session, debug)
 
     # Create bot agents
     use_models = _bot_manager.models_available()
     agents = _bot_manager.create_agents(user.bot_strength) if use_models else []
 
     # Run initial bot turns if player 0 doesn't go first
-    if engine.current_player != 0:
+    if session.current_player != 0:
         decision_fn = _make_decision_fn(agents, use_models)
-        engine.run_bot_turns(decision_fn)
+        session.run_bot_turns(decision_fn)
 
     # Save game to DB
     manifest = _bot_manager.get_manifest()
     game = Game(
         user_id=user.id,
         status="in_progress",
-        state_json=json.dumps(engine.serialize()),
-        turns=engine.turns,
+        state_json=json.dumps(session.serialize()),
+        turns=session.turns,
         bot_strength_start=user.bot_strength,
         model_version=manifest.get("version", "unknown"),
     )
@@ -222,7 +229,7 @@ async def create_game(user: User, db: AsyncSession) -> StartGameResponse:
     await db.commit()
     await db.refresh(game)
 
-    game_state = _build_game_state(game, engine)
+    game_state = _build_game_state(game, session)
     return StartGameResponse(
         gameState=game_state,
         modelInfo=_model_info(),
@@ -241,24 +248,24 @@ async def play_card(
     After a game ends, adjusts bot strength based on outcome.
     """
     game = await _load_game(game_id, user.id, db)
-    engine = UnoGameEngine.deserialize(json.loads(game.state_json))
+    session = GameSession.deserialize(json.loads(game.state_json))
 
     # Validate it's the human's turn
-    if engine.current_player != 0:
+    if session.current_player != 0:
         return PlayResponse(
             valid=False,
             botTurns=[],
-            gameState=_build_game_state(game, engine),
+            gameState=_build_game_state(game, session),
         )
 
     # Play the card
-    result = engine.play_card(0, card_data.model_dump(), chosen_color)
+    result = session.play_card(0, card_data.model_dump(), chosen_color)
 
     if not result.get("valid"):
         return PlayResponse(
             valid=False,
             botTurns=[],
-            gameState=_build_game_state(game, engine),
+            gameState=_build_game_state(game, session),
         )
 
     # Prepend penalty draw (plus2/plus4) as a bot turn so the frontend animates it
@@ -279,23 +286,23 @@ async def play_card(
         use_models = _bot_manager.models_available()
         agents = _bot_manager.create_agents(game.bot_strength_start) if use_models else []
         decision_fn = _make_decision_fn(agents, use_models)
-        bot_turns_raw += engine.run_bot_turns(decision_fn)
+        bot_turns_raw += session.run_bot_turns(decision_fn)
 
     # Check for winner (human or bot)
-    winner = engine.get_winner()
+    winner = session.get_winner()
     if winner is not None:
-        await _finish_game(game, engine, user, winner, db)
+        await _finish_game(game, session, user, winner, db)
     else:
         # Save updated state
-        game.state_json = json.dumps(engine.serialize())
-        game.turns = engine.turns
+        game.state_json = json.dumps(session.serialize())
+        game.turns = session.turns
 
     await db.commit()
 
     return PlayResponse(
         valid=True,
         botTurns=_build_bot_turns(bot_turns_raw),
-        gameState=_build_game_state(game, engine),
+        gameState=_build_game_state(game, session),
     )
 
 
@@ -306,48 +313,48 @@ async def pass_turn(
 ) -> PassResponse:
     """Human draws a card and passes, then bots respond."""
     game = await _load_game(game_id, user.id, db)
-    engine = UnoGameEngine.deserialize(json.loads(game.state_json))
+    session = GameSession.deserialize(json.loads(game.state_json))
 
     # Validate it's the human's turn
-    if engine.current_player != 0:
+    if session.current_player != 0:
         return PassResponse(
             drawnCard=None,
             botTurns=[],
-            gameState=_build_game_state(game, engine),
+            gameState=_build_game_state(game, session),
         )
 
     # Human draws and passes
-    result = engine.pass_turn(0)
+    result = session.pass_turn(0)
     drawn_card = CardSchema(**result["drawn_card"]) if result.get("drawn_card") else None
 
     # Run bot turns
     use_models = _bot_manager.models_available()
     agents = _bot_manager.create_agents(game.bot_strength_start) if use_models else []
     decision_fn = _make_decision_fn(agents, use_models)
-    bot_turns_raw = engine.run_bot_turns(decision_fn)
+    bot_turns_raw = session.run_bot_turns(decision_fn)
 
     # Check for winner
-    winner = engine.get_winner()
+    winner = session.get_winner()
     if winner is not None:
-        await _finish_game(game, engine, user, winner, db)
+        await _finish_game(game, session, user, winner, db)
     else:
-        game.state_json = json.dumps(engine.serialize())
-        game.turns = engine.turns
+        game.state_json = json.dumps(session.serialize())
+        game.turns = session.turns
 
     await db.commit()
 
     return PassResponse(
         drawnCard=drawn_card,
         botTurns=_build_bot_turns(bot_turns_raw),
-        gameState=_build_game_state(game, engine),
+        gameState=_build_game_state(game, session),
     )
 
 
 async def get_game(game_id: str, user: User, db: AsyncSession) -> GameStateSchema:
     """Load and return current game state (for reconnection)."""
     game = await _load_game(game_id, user.id, db)
-    engine = UnoGameEngine.deserialize(json.loads(game.state_json))
-    return _build_game_state(game, engine)
+    session = GameSession.deserialize(json.loads(game.state_json))
+    return _build_game_state(game, session)
 
 
 async def find_active_game(user: User, db: AsyncSession) -> ActiveGameResponse:
@@ -363,10 +370,10 @@ async def find_active_game(user: User, db: AsyncSession) -> ActiveGameResponse:
     if game is None:
         return ActiveGameResponse(hasActiveGame=False, gameState=None)
 
-    engine = UnoGameEngine.deserialize(json.loads(game.state_json))
+    session = GameSession.deserialize(json.loads(game.state_json))
     return ActiveGameResponse(
         hasActiveGame=True,
-        gameState=_build_game_state(game, engine),
+        gameState=_build_game_state(game, session),
     )
 
 
@@ -399,7 +406,7 @@ async def _load_game(game_id: str, user_id: str, db: AsyncSession) -> Game:
 
 async def _finish_game(
     game: Game,
-    engine: UnoGameEngine,
+    session: GameSession,
     user: User,
     winner: int,
     db: AsyncSession,
@@ -407,8 +414,8 @@ async def _finish_game(
     """Finalize a game: update records, adjust bot strength."""
     game.status = "finished"
     game.winner = winner
-    game.turns = engine.turns
-    game.state_json = json.dumps(engine.serialize())
+    game.turns = session.turns
+    game.state_json = json.dumps(session.serialize())
     game.finished_at = _utcnow()
 
     # Update user stats

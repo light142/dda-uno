@@ -4,13 +4,8 @@ import os
 import torch
 from rlcard.agents import DQNAgent
 
-from game_logic.agents.base import BaseAgent
-from config.game import NUM_ACTIONS, STATE_SHAPE
-from config.training import (
-    LEARNING_RATE, BATCH_SIZE, REPLAY_MEMORY_SIZE, REPLAY_MEMORY_INIT_SIZE,
-    UPDATE_TARGET_EVERY, DISCOUNT_FACTOR, EPSILON_START, EPSILON_END,
-    EPSILON_DECAY_STEPS, TRAIN_EVERY, MODEL_DIR, SAVE_EVERY,
-)
+from engine.game_logic.agents.base import BaseAgent
+from engine.config.game import NUM_ACTIONS, STATE_SHAPE
 
 
 class RLAgent(BaseAgent):
@@ -19,15 +14,22 @@ class RLAgent(BaseAgent):
     Used for both strong agents (trained to win) and weak agents
     (trained to help seat 0 win). The difference is in the reward
     function used during training, not in the agent architecture.
+
+    When loading a pre-trained model (model_path), no hyperparameters are needed.
+    When creating a fresh agent for training, pass hyperparameters as kwargs.
     """
 
-    def __init__(self, model_path: str = None, device: str = None):
+    def __init__(self, model_path: str = None, device: str = None, **kwargs):
         """Initialize the RL agent.
 
         Args:
             model_path: Path to load pre-trained weights from. If None,
                 creates a fresh agent for training.
             device: PyTorch device ('cpu', 'cuda'). Auto-detected if None.
+            **kwargs: Training hyperparameters (only used when creating fresh agent):
+                learning_rate, batch_size, replay_memory_size, replay_memory_init_size,
+                update_target_every, discount_factor, epsilon_start, epsilon_end,
+                epsilon_decay_steps, train_every, save_path, save_every
         """
         super().__init__()
 
@@ -38,19 +40,19 @@ class RLAgent(BaseAgent):
             self._agent = DQNAgent(
                 num_actions=NUM_ACTIONS,
                 state_shape=STATE_SHAPE,
-                replay_memory_size=REPLAY_MEMORY_SIZE,
-                replay_memory_init_size=REPLAY_MEMORY_INIT_SIZE,
-                update_target_estimator_every=UPDATE_TARGET_EVERY,
-                discount_factor=DISCOUNT_FACTOR,
-                epsilon_start=EPSILON_START,
-                epsilon_end=EPSILON_END,
-                epsilon_decay_steps=EPSILON_DECAY_STEPS,
-                batch_size=BATCH_SIZE,
-                train_every=TRAIN_EVERY,
-                learning_rate=LEARNING_RATE,
+                replay_memory_size=kwargs.get('replay_memory_size', 20_000),
+                replay_memory_init_size=kwargs.get('replay_memory_init_size', 1_000),
+                update_target_estimator_every=kwargs.get('update_target_every', 1_000),
+                discount_factor=kwargs.get('discount_factor', 0.99),
+                epsilon_start=kwargs.get('epsilon_start', 1.0),
+                epsilon_end=kwargs.get('epsilon_end', 0.1),
+                epsilon_decay_steps=kwargs.get('epsilon_decay_steps', 20_000),
+                batch_size=kwargs.get('batch_size', 32),
+                train_every=kwargs.get('train_every', 1),
+                learning_rate=kwargs.get('learning_rate', 0.00005),
                 device=device,
-                save_path=MODEL_DIR,
-                save_every=SAVE_EVERY,
+                save_path=kwargs.get('save_path'),
+                save_every=kwargs.get('save_every'),
             )
 
         self.use_raw = self._agent.use_raw
