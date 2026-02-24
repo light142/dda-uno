@@ -380,13 +380,21 @@ export class GameOverOverlay {
         btnText.setOrigin(0.5);
         controlGroup.add(btnText);
 
-        // Full-screen touch zone (same pattern as tap-to-play) for reliable iOS touch
-        const hitZone = scene.add.zone(640, 360, 1280, 720);
-        hitZone.setDepth(baseDepth + 20);
-        hitZone.setInteractive();
-        scene._gameOverHitZone = hitZone;
+        // Graphics-based hit area on the scene for reliable iOS touch
+        const hitW = btnCfg.WIDTH + 60;
+        const hitH = btnCfg.HEIGHT + 40;
+        const hitArea = scene.add.graphics();
+        hitArea.fillStyle(0x000000, 0.001); // nearly invisible but renderable
+        hitArea.fillRect(-hitW / 2, -hitH / 2, hitW, hitH);
+        hitArea.setPosition(cx, cfg.Y);
+        hitArea.setDepth(baseDepth + 20);
+        hitArea.setInteractive(
+            new Phaser.Geom.Rectangle(-hitW / 2, -hitH / 2, hitW, hitH),
+            Phaser.Geom.Rectangle.Contains
+        );
+        scene._gameOverHitZone = hitArea;
 
-        hitZone.on('pointerdown', () => {
+        hitArea.on('pointerdown', () => {
             scene.tweens.add({
                 targets: controlGroup,
                 scaleX: btnCfg.PRESS_SCALE,

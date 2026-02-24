@@ -673,5 +673,5 @@ export const GAME_OVER = {
 };
 
 // Set to true to show a debug "Game Over" button during gameplay
-export const DEBUG_GAME_OVER_BUTTON = true;
+export const DEBUG_GAME_OVER_BUTTON = false;
 
