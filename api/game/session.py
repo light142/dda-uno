@@ -15,7 +15,7 @@ from rlcard.games.uno.card import UnoCard
 from engine.game_logic.game import UnoGame
 from engine.config.game import NUM_PLAYERS, PLAYER_SEAT
 
-from .cards import Card, is_wild, pick_best_color, get_playable_cards
+from .cards import Card, is_wild, is_valid_play, pick_best_color, get_playable_cards
 from .rlcard_bridge import (
     card_to_action_id, action_id_to_card,
     rlcard_card_to_api, api_card_to_rlcard,
@@ -120,10 +120,11 @@ class GameSession:
         }
 
     def pass_turn(self, player_index: int) -> dict:
-        """Human draws a card and passes (standard UNO behavior).
+        """Human draws a card. If the drawn card is playable, auto-plays it.
 
-        Bypasses RLCard's draw action which auto-plays matching cards.
-        Instead, manually pops from deck and adds to hand.
+        Bypasses RLCard's draw action to give the human the card first.
+        If the card matches the top card / active color, it is played
+        automatically (matching UNO rules and bot behaviour).
         """
         game = self._game
 
@@ -131,26 +132,78 @@ class GameSession:
         if not game.dealer.deck:
             game.round.replace_deck()
 
-        # Manual draw
-        drawn_card = None
-        if game.dealer.deck:
-            rl_card = game.dealer.deck.pop()
+        if not game.dealer.deck:
+            # No cards left at all — just advance
+            self.turns += 1
+            self.current_player = self._next_player(player_index)
+            game.round.current_player = self.current_player
+            return {
+                "drawn_card": None, "auto_played": False,
+                "chosen_color": None, "penalty_draw": None,
+                "winner": None, "next_player": self.current_player,
+                "deck_remaining": 0,
+            }
+
+        rl_card = game.dealer.deck.pop()
+        drawn_card = rlcard_card_to_api(rl_card)
+
+        # Check if drawn card can be played
+        top_card = rlcard_card_to_api(game.round.target)
+        active_color = self._get_active_color()
+
+        if is_valid_play(drawn_card, top_card, active_color):
+            # Auto-play: add to hand so game.step() can find it
             game.players[player_index].hand.append(rl_card)
-            drawn_card = rlcard_card_to_api(rl_card)
 
-        self.turns += 1
+            chosen_color = None
+            if is_wild(drawn_card):
+                hand_cards = [rlcard_card_to_api(c)
+                              for c in game.players[player_index].hand]
+                chosen_color = pick_best_color(hand_cards)
 
-        # Advance turn manually
-        direction = game.round.direction
-        next_player = (player_index + direction) % self.num_players
-        game.round.current_player = next_player
-        self.current_player = next_player
+            action_id = card_to_action_id(drawn_card, chosen_color)
+            action_str = ACTION_LIST[action_id]
 
-        return {
-            "drawn_card": drawn_card.to_dict() if drawn_card else None,
-            "next_player": self.current_player,
-            "deck_remaining": len(game.dealer.deck),
-        }
+            hand_sizes_before = [len(p.hand) for p in game.players]
+            game.step(action_str)
+            self.turns += 1
+
+            penalty_draw = self._detect_penalty(
+                hand_sizes_before, drawn_card)
+
+            winner = None
+            if game.round.is_over:
+                winner = (game.round.winner[0]
+                          if game.round.winner else None)
+
+            self.current_player = game.round.current_player
+
+            return {
+                "drawn_card": drawn_card.to_dict(),
+                "auto_played": True,
+                "chosen_color": chosen_color,
+                "penalty_draw": penalty_draw,
+                "winner": winner,
+                "next_player": self.current_player,
+                "deck_remaining": len(game.dealer.deck),
+            }
+        else:
+            # Not playable — keep in hand and advance turn
+            game.players[player_index].hand.append(rl_card)
+            self.turns += 1
+
+            self.current_player = self._next_player(player_index)
+            game.round.current_player = self.current_player
+
+            return {
+                "drawn_card": drawn_card.to_dict(),
+                "auto_played": False,
+                "chosen_color": None,
+                "penalty_draw": None,
+                "winner": None,
+                "next_player": self.current_player,
+                "deck_remaining": len(game.dealer.deck),
+            }
 
     def run_bot_turns(self, bot_decision_fn: Callable) -> list[dict]:
         """Run all bot turns until it's the human's turn or game ends.

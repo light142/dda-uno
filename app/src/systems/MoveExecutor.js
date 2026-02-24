@@ -119,7 +119,12 @@ export class MoveExecutor {
      */
     _playCardToCenter(card, player, move, onCardLanded, onFullyDone) {
         player.removeCard(card);
-        this.scene.triggerPlayEmotes(move.playerIndex, move.card, player.cards.length);
+        const isWinningCard = player.cards.length === 0;
+
+        // Skip emotes on winning card
+        if (!isWinningCard) {
+            this.scene.triggerPlayEmotes(move.playerIndex, move.card, player.cards.length);
+        }
 
         const effect = GameLogic.getCardEffect(move.card);
 
@@ -131,12 +136,17 @@ export class MoveExecutor {
 
         card.playToCenter(x, y, rotation, () => {
             this.scene.discardPile.push(card);
-            this.scene.playPowerCardEffect(card, move.card.value);
 
-            if (move.chosenColor && (move.card.value === 'wild' || move.card.value === 'plus4')) {
-                this.scene.scheduleTimer(COLOR_REPLACE.BOT_DELAY, () => {
-                    this.scene._animateColorReplacement(card, move.card.value, move.chosenColor);
-                });
+            if (isWinningCard) {
+                this.scene._fxWinningCard(card);
+            } else {
+                this.scene.playPowerCardEffect(card, move.card.value);
+
+                if (move.chosenColor && (move.card.value === 'wild' || move.card.value === 'plus4')) {
+                    this.scene.scheduleTimer(COLOR_REPLACE.BOT_DELAY, () => {
+                        this.scene._animateColorReplacement(card, move.card.value, move.chosenColor);
+                    });
+                }
             }
         });
 
@@ -151,8 +161,8 @@ export class MoveExecutor {
 
         if (onCardLanded) onCardLanded();
 
-        // Wait for reverse animation before advancing to next move
-        if (effect.type === 'reverse') {
+        // Skip reverse arrow animation on winning card — go straight to done
+        if (!isWinningCard && effect.type === 'reverse') {
             this.scene.isClockwise = !this.scene.isClockwise;
             this.scene.directionArrow.toggle(() => {
                 if (onFullyDone) onFullyDone();

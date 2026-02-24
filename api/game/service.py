@@ -108,12 +108,15 @@ def _apply_debug_cards(session: GameSession, debug: dict):
     """
     game = session._game
 
-    # Override starter card
-    sc = debug["starterCard"]
-    starter = Card(suit=sc["suit"], value=sc["value"])
-    active_color = debug.get("activeColor") or starter.suit or "red"
-    game.round.target = api_card_to_rlcard(starter, active_color)
-    game.round.played_cards = [api_card_to_rlcard(starter, active_color)]
+    # Determine active color (from explicit setting, starter card, or current game)
+    sc = debug.get("starterCard")
+    if sc:
+        starter = Card(suit=sc["suit"], value=sc["value"])
+        active_color = debug.get("activeColor") or starter.suit or "red"
+        game.round.target = api_card_to_rlcard(starter, active_color)
+        game.round.played_cards = [api_card_to_rlcard(starter, active_color)]
+    else:
+        active_color = debug.get("activeColor") or session.get_state_for_player(0).get("activeColor") or "red"
 
     # Override player hands if provided
     player_hands = debug.get("playerHands")
@@ -153,10 +156,11 @@ def _apply_debug_cards(session: GameSession, debug: dict):
 
 def set_debug_cards(user_id: str, body: DebugCardsRequest) -> DebugCardsResponse:
     """Store fixed card configuration for this user."""
-    data = {
-        "starterCard": body.starterCard.model_dump(),
-        "activeColor": body.activeColor,
-    }
+    data: dict = {}
+    if body.starterCard is not None:
+        data["starterCard"] = body.starterCard.model_dump()
+    if body.activeColor is not None:
+        data["activeColor"] = body.activeColor
     if body.playerHands is not None:
         data["playerHands"] = [
             [c.model_dump() for c in hand] for hand in body.playerHands
@@ -323,15 +327,29 @@ async def pass_turn(
             gameState=_build_game_state(game, session),
         )
 
-    # Human draws and passes
+    # Human draws (auto-plays if the drawn card is playable)
     result = session.pass_turn(0)
     drawn_card = CardSchema(**result["drawn_card"]) if result.get("drawn_card") else None
 
-    # Run bot turns
-    use_models = _bot_manager.models_available()
-    agents = _bot_manager.create_agents(game.bot_strength_start) if use_models else []
-    decision_fn = _make_decision_fn(agents, use_models)
-    bot_turns_raw = session.run_bot_turns(decision_fn)
+    # If auto-played, prepend any penalty draw as a bot turn
+    bot_turns_raw = []
+    if result.get("auto_played"):
+        penalty = result.get("penalty_draw")
+        if penalty:
+            bot_turns_raw.append({
+                "playerIndex": penalty["playerIndex"],
+                "action": "draw",
+                "card": None,
+                "drawnCards": penalty["drawnCards"],
+                "chosenColor": None,
+            })
+
+    # Run bot turns (unless the auto-play already won the game)
+    if result.get("winner") is None:
+        use_models = _bot_manager.models_available()
+        agents = _bot_manager.create_agents(game.bot_strength_start) if use_models else []
+        decision_fn = _make_decision_fn(agents, use_models)
+        bot_turns_raw += session.run_bot_turns(decision_fn)
 
     # Check for winner
     winner = session.get_winner()
@@ -345,6 +363,8 @@ async def pass_turn(
 
     return PassResponse(
         drawnCard=drawn_card,
+        autoPlayed=result.get("auto_played", False),
+        chosenColor=result.get("chosen_color"),
         botTurns=_build_bot_turns(bot_turns_raw),
         gameState=_build_game_state(game, session),
     )

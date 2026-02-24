@@ -123,11 +123,11 @@ class PlayRequest(BaseModel):
 
 
 class DebugCardsRequest(BaseModel):
-    starterCard: CardSchema = Field(..., description="The initial top card")
+    starterCard: Optional[CardSchema] = Field(None, description="The initial top card (optional)")
     activeColor: Optional[str] = Field(None, description="Active color (required if starter is wild)")
     playerHands: Optional[list[list[CardSchema]]] = Field(
         None,
-        description="Fixed hands for all 4 players. Omit to only fix starter card.",
+        description="Fixed hands for all 4 players. Omit to keep random.",
     )
 
     model_config = {
@@ -142,7 +142,12 @@ class DebugCardsRequest(BaseModel):
                         [{"suit": "yellow", "value": "9"}],
                         [{"suit": "red", "value": "0"}],
                     ],
-                }
+                },
+                {
+                    "playerHands": [
+                        [{"value": "wild"}, {"value": "wild"}],
+                    ],
+                },
             ]
         }
     }
@@ -169,6 +174,8 @@ class PlayResponse(BaseModel):
 
 class PassResponse(BaseModel):
     drawnCard: Optional[CardSchema] = None
+    autoPlayed: bool = Field(False, description="Whether the drawn card was auto-played")
+    chosenColor: Optional[str] = Field(None, description="Chosen color if auto-played wild")
     botTurns: list[BotTurnSchema] = []
     gameState: GameStateSchema
 

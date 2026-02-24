@@ -31,6 +31,7 @@ export class GameApiAdapter {
             playerHands: gs.playerHands,
             starterCard: gs.topCard,
             activeColor: gs.activeColor,
+            isClockwise: gs.isClockwise,
             deckRemaining: gs.deckRemaining,
             deckTotal: gs.deckRemaining + (gs.discardPile?.length || 0)
                 + this._countAllHands(gs.playerHands),
@@ -77,6 +78,8 @@ export class GameApiAdapter {
 
         return {
             drawnCard: res.drawnCard,
+            autoPlayed: res.autoPlayed || false,
+            chosenColor: res.chosenColor || null,
             botTurns: res.botTurns || [],
             topCard: res.gameState.topCard,
             activeColor: res.gameState.activeColor,

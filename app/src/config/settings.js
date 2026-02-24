@@ -273,6 +273,19 @@ export const POWER_CARD_FX = {
         DURATION: 700,
         COLORS: [0xff3333, 0x3399ff, 0x33cc33, 0xffdd00],
     },
+    WINNING_CARD: {
+        CENTER_SCALE: 4.0,
+        CENTER_SPIN: Math.PI,
+        CENTER_DURATION: 900,
+        CENTER_TINT: 0xFFD700,
+        BURST_COUNT: 6,
+        BURST_SPREAD: 120,
+        BURST_SCALE: 2.0,
+        BURST_DURATION: 700,
+        BURST_TINT: 0xFFD700,
+        FLASH_ALPHA: 0.3,
+        FLASH_DURATION: 250,
+    },
 };
 
 export const COLOR_PICKER = {
@@ -512,4 +525,153 @@ export const HAMBURGER_MENU = {
         EASE: 'Power2',
     },
 };
+
+export const GAME_OVER = {
+    DEPTH: 180,
+
+    // Dim layer behind the panel (full-screen, semi-transparent)
+    DIM: {
+        COLOR: 0x000000,
+        ALPHA: 0.55,
+        FADE_DURATION: 600,
+    },
+
+    // Centered panel
+    PANEL: {
+        X: 640,
+        Y: 360,
+        WIDTH: 760,
+        HEIGHT: 560,
+        CORNER_RADIUS: 28,
+        BG_COLOR: 0x0a0820,
+        BG_ALPHA: 0.94,
+        BORDER_COLOR: 0xFFD700,
+        BORDER_WIDTH: 2,
+        BORDER_ALPHA: 0.35,
+        // Inner accent line
+        INNER_BORDER_COLOR: 0x82F1ED,
+        INNER_BORDER_WIDTH: 1,
+        INNER_BORDER_ALPHA: 0.08,
+        INNER_INSET: 6,
+        // Entrance
+        ENTRANCE_DURATION: 500,
+        EASE: 'Back.easeOut',
+    },
+
+    // Cards drift outward gently
+    CARD_SCATTER: {
+        DELAY: 0,
+        DURATION: 1200,
+        SPREAD_X: 800,
+        SPREAD_Y: 500,
+        SPIN: 360,
+        STAGGER: 50,
+        EASE: 'Sine.easeIn',
+    },
+
+    // Winner avatar flies to panel top area
+    AVATAR_SPOTLIGHT: {
+        DELAY: 400,
+        FLY_DURATION: 800,
+        TARGET_X: 640,
+        TARGET_Y: 230,
+        TARGET_SCALE: 1.8,
+        EASE: 'Back.easeOut',
+        // Glow ring behind avatar
+        RING: {
+            RADIUS: 80,
+            COLOR_WIN: 0xFFD700,
+            COLOR_LOSE: 0xff4444,
+            WIDTH: 3,
+            ALPHA: 0.7,
+            SPIN_DURATION: 4000,
+        },
+        // Pulsing scale on the ring
+        PULSE: {
+            MIN: 0.95,
+            MAX: 1.08,
+            DURATION: 1200,
+        },
+    },
+
+    // Result title text
+    TITLE: {
+        Y: 380,
+        WIN_TEXT: 'YOU WIN!',
+        LOSE_TEXT: 'YOU LOSE',
+        FONT_SIZE: 48,
+        FONT_FAMILY: 'Nunito, Arial',
+        WIN_COLOR: '#FFD700',
+        LOSE_COLOR: '#ff6666',
+        STROKE_COLOR: '#000000',
+        STROKE_THICKNESS: 5,
+        ENTRANCE_DELAY: 1000,
+        ENTRANCE_DURATION: 600,
+        EASE: 'Back.easeOut',
+        NAME: {
+            OFFSET_Y: 60,
+            FONT_SIZE: 20,
+            COLOR: '#E7FDF9',
+            ALPHA: 0.85,
+        },
+    },
+
+    // Particle burst (confetti for win, embers for lose)
+    PARTICLES: {
+        DELAY: 1100,
+        WIN: {
+            COLORS: [0xFFD700, 0xff3333, 0x3399ff, 0x33cc33, 0xff8800, 0xcc33ff],
+            COUNT: 60,
+            SPEED: { MIN: 120, MAX: 380 },
+            ANGLE: { MIN: 220, MAX: 320 },
+            SCALE: { START: 0.6, END: 0 },
+            LIFESPAN: 2000,
+            GRAVITY_Y: 200,
+        },
+        LOSE: {
+            COLORS: [0xff4444, 0x882222, 0xff8844],
+            COUNT: 25,
+            SPEED: { MIN: 40, MAX: 120 },
+            ANGLE: { MIN: 250, MAX: 290 },
+            SCALE: { START: 0.35, END: 0 },
+            LIFESPAN: 1600,
+            GRAVITY_Y: 50,
+        },
+    },
+
+    // Countdown timer & play again button
+    CONTROLS: {
+        Y: 530,
+        DELAY: 1500,
+        ENTRANCE_DURATION: 400,
+        EASE: 'Back.easeOut',
+        COUNTDOWN_SECONDS: 15,
+        TIMER: {
+            FONT_SIZE: 24,
+            COLOR: '#998877',
+            OFFSET_Y: 50,
+        },
+        BUTTON: {
+            WIDTH: 240,
+            HEIGHT: 52,
+            CORNER_RADIUS: 26,
+            BG_COLOR: 0xFFD700,
+            BG_ALPHA: 0.9,
+            TEXT: 'Play Again',
+            FONT_SIZE: 22,
+            TEXT_COLOR: '#1a0a0a',
+            HOVER_SCALE: 1.06,
+            PRESS_SCALE: 0.95,
+        },
+    },
+
+    // Cleanup / exit transition
+    EXIT: {
+        DURATION: 350,
+        EASE: 'Power2',
+    },
+};
+
+// Set to true to show a debug "Game Over" button during gameplay
+export const DEBUG_GAME_OVER_BUTTON = false;
 

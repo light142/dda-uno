@@ -7,7 +7,7 @@ import { DirectionArrow } from '../entities/DirectionArrow.js';
 import { PassButton } from '../entities/PassButton.js';
 import { UnoButton } from '../entities/UnoButton.js';
 import { Card } from '../entities/Card.js';
-import { CARD_OFFSET_TO_CENTER, CARD_SCALE, DRAG_DROP, ANIMATION, POWER_CARD_FX, COLOR_REPLACE, RESHUFFLE, RESYNC, DECK_VISUAL, GAME_INTRO, HAMBURGER_MENU } from '../config/settings.js';
+import { CARD_OFFSET_TO_CENTER, CARD_SCALE, DRAG_DROP, ANIMATION, POWER_CARD_FX, COLOR_REPLACE, RESHUFFLE, RESYNC, DECK_VISUAL, GAME_INTRO, HAMBURGER_MENU, DEBUG_GAME_OVER_BUTTON } from '../config/settings.js';
 import { GameLogic } from '../logic/GameLogic.js';
 import { MoveExecutor } from '../systems/MoveExecutor.js';
 import { StateManager } from '../systems/StateManager.js';
@@ -18,6 +18,7 @@ import { GameApiAdapter } from '../api/GameApiAdapter.js';
 import { ErrorPopup } from '../ui/ErrorPopup.js';
 import { ColorPicker } from '../ui/ColorPicker.js';
 import { ResumeToast } from '../ui/ResumeToast.js';
+import { GameOverOverlay } from '../ui/GameOverOverlay.js';
 
 export class GameScene extends Phaser.Scene {
     constructor() {
@@ -542,7 +543,9 @@ export class GameScene extends Phaser.Scene {
 
         // ── Nuclear cleanup: halt ALL in-flight animations and timers ──
         // This catches CardDealer's untracked delayedCalls, visual deck shuffles, etc.
+        GameOverOverlay.forceClear(this);
         ErrorPopup.forceClear(this);
+        if (this._debugGameOverBtn) { this._debugGameOverBtn.destroy(); this._debugGameOverBtn = null; }
         this.time.removeAllEvents();
         this.pendingTimers = [];
         this.tweens.killAll();
@@ -618,14 +621,13 @@ export class GameScene extends Phaser.Scene {
         this.directionArrow.sprite.setScale(this._arrowTargetScaleX, this._arrowTargetScaleY);
         this.directionArrow.sprite.setAngle(0);
 
-        // Reset bot avatars
+        // Reset all avatars (including local player, which may have been moved by game-over overlay)
         this.playerManager.playerAvatars.forEach((avatar, i) => {
-            if (i !== 0) {
-                avatar.setAlpha(0);
-                avatar.setScale(1);
-                avatar.x = avatar.player.x;
-                avatar.y = avatar.player.y;
-            }
+            avatar.setScale(1);
+            avatar.x = avatar.player.x;
+            avatar.y = avatar.player.y;
+            // Local player stays visible, bots hidden for intro entrance
+            avatar.setAlpha(i === 0 ? 1 : 0);
         });
 
         // Reset visual deck
@@ -641,8 +643,13 @@ export class GameScene extends Phaser.Scene {
         this.input.off('drag');
         this.input.off('dragend');
 
-        // Show tap to start again
-        this.showTapToStart();
+        // After game-over restart, skip "Tap to Play" and jump straight into the intro
+        if (this._skipTapToStart) {
+            this._skipTapToStart = false;
+            this.startIntroSequence();
+        } else {
+            this.showTapToStart();
+        }
     }
 
     handleLogout() {
@@ -703,8 +710,6 @@ export class GameScene extends Phaser.Scene {
         // Reset game state
         this.topCard = null;
         this.activeColor = null;
-        this.isClockwise = true;
-        this.directionArrow.setDirection(true);
 
         // Cancel any pending timers from previous round
         this.cancelPendingTimers();
@@ -731,6 +736,8 @@ export class GameScene extends Phaser.Scene {
         this.deckTotal = gameData.deckTotal;
         this.topCard = gameData.starterCard;
         this.activeColor = gameData.activeColor ?? (gameData.starterCard ? gameData.starterCard.suit : null);
+        this.isClockwise = gameData.isClockwise ?? true;
+        this.directionArrow.setDirection(this.isClockwise);
 
         this.dealer.syncWithVisualDeck();
         this.visualDeck.reset();
@@ -780,6 +787,7 @@ export class GameScene extends Phaser.Scene {
                 this._animateStarterCard(starterCardData, () => {
                     this.passButton.enable();
                     this.enablePlayerTurn();
+                    this._createDebugGameOverButton();
                 });
             });
         });
@@ -1147,6 +1155,7 @@ export class GameScene extends Phaser.Scene {
         } else {
             this.disablePlayerTurn();
         }
+        this._createDebugGameOverButton();
     }
 
     /**
@@ -1416,18 +1425,22 @@ export class GameScene extends Phaser.Scene {
 
         this.disablePlayerTurn();
 
-        // If wild card, show color picker before animating
+        // Animate card to center
+        player.removeCard(card);
+        const isWinningCard = player.cards.length === 0;
+
+        // Skip color picker, emotes, and power FX on the winning card
         let chosenColor = null;
-        if (GameLogic.isWildCard(cardData)) {
+        if (!isWinningCard && GameLogic.isWildCard(cardData)) {
             chosenColor = await ColorPicker.show(this, cardData.value);
         }
 
-        // Animate card to center
-        player.removeCard(card);
-        if (player.cards.length === 1 && player.isLocal) {
+        if (!isWinningCard && player.cards.length === 1 && player.isLocal) {
             this.unoButton.enable();
         }
-        this.triggerPlayEmotes(0, cardData, player.cards.length);
+        if (!isWinningCard) {
+            this.triggerPlayEmotes(0, cardData, player.cards.length);
+        }
 
         const effect = GameLogic.getCardEffect(cardData);
 
@@ -1441,15 +1454,19 @@ export class GameScene extends Phaser.Scene {
         await new Promise(resolve => {
             card.playToCenter(x, y, rotation, () => {
                 this.discardPile.push(card);
-                this.playPowerCardEffect(card, cardData.value);
+                if (isWinningCard) {
+                    this._fxWinningCard(card);
+                } else {
+                    this.playPowerCardEffect(card, cardData.value);
+                }
                 resolve();
             });
         });
 
         this.refanCards(player);
 
-        // If wild card, flip to colored version after landing
-        if (chosenColor) {
+        // If wild card, flip to colored version after landing (skip on winning card)
+        if (!isWinningCard && chosenColor) {
             await this._animateColorReplacement(card, cardData.value, chosenColor);
         }
 
@@ -1469,7 +1486,11 @@ export class GameScene extends Phaser.Scene {
                 return;
             }
 
-
+            // Winning card — go straight to game over, skip all post-play effects
+            if (isWinningCard) {
+                this._handleGameOver(result.winner ?? 0);
+                return;
+            }
 
             // Sync state from response
             this.topCard = result.topCard;
@@ -1939,27 +1960,93 @@ export class GameScene extends Phaser.Scene {
 
         this.dealer.dealToPlayer(localPlayer, result.drawnCard, targetPos, (card) => {
             card.flip(() => {
-                card.makeInteractive();
-                this.refanCards(localPlayer);
-
-                const proceedToBotTurns = () => {
+                if (result.autoPlayed) {
+                    // Auto-play: drawn card is playable — fly it to center
                     this.scheduleTimer(300, () => {
-                        this.moveExecutor.executeMoves(botTurns, () => {
-                            this.syncState();
-                            this._checkBotWin(result);
-                            this.enablePlayerTurn();
-                        });
-                    });
-                };
+                        localPlayer.removeCard(card);
+                        const isWinningCard = localPlayer.cards.length === 0;
 
-                // Reshuffle animation plays after the draw that emptied the deck
-                if (result.reshuffled) {
-                    this.scheduleTimer(200, () => {
-                        this._animateReshuffle(result.deckCountAfterReshuffle)
-                            .then(proceedToBotTurns);
+                        if (!isWinningCard) {
+                            this.triggerPlayEmotes(0, result.drawnCard, localPlayer.cards.length);
+                        }
+
+                        const zone = DRAG_DROP.PLAY_ZONE;
+                        const scatter = DRAG_DROP.PLAY_SCATTER;
+                        const x = zone.X + Phaser.Math.FloatBetween(-scatter.OFFSET, scatter.OFFSET);
+                        const y = zone.Y + Phaser.Math.FloatBetween(-scatter.OFFSET, scatter.OFFSET);
+                        const rot = Phaser.Math.FloatBetween(-scatter.ROTATION, scatter.ROTATION);
+
+                        card.playToCenter(x, y, rot, () => {
+                            this.discardPile.push(card);
+                            if (isWinningCard) {
+                                this._fxWinningCard(card);
+                            } else {
+                                this.playPowerCardEffect(card, result.drawnCard.value);
+
+                                if (result.chosenColor) {
+                                    this.scheduleTimer(COLOR_REPLACE.BOT_DELAY, () => {
+                                        this._animateColorReplacement(card, result.drawnCard.value, result.chosenColor);
+                                    });
+                                }
+                            }
+                        });
+
+                        this.refanCards(localPlayer);
+                        this.topCard = result.topCard;
+                        this.activeColor = result.activeColor;
+
+                        // Winning card — go straight to game over
+                        if (isWinningCard) {
+                            this._handleGameOver(result.winner ?? 0);
+                            return;
+                        }
+
+                        const proceedAfterAutoPlay = () => {
+                            if (localPlayer.cards.length === 0) {
+                                this._handleGameOver(result.winner ?? 0);
+                                return;
+                            }
+                            this.scheduleTimer(400, () => {
+                                this.moveExecutor.executeMoves(botTurns, () => {
+                                    this.syncState();
+                                    this._checkBotWin(result);
+                                    this.enablePlayerTurn();
+                                });
+                            });
+                        };
+
+                        const effect = GameLogic.getCardEffect(result.drawnCard);
+                        if (effect.type === 'reverse') {
+                            this.isClockwise = !this.isClockwise;
+                            this.directionArrow.toggle(() => proceedAfterAutoPlay());
+                        } else {
+                            proceedAfterAutoPlay();
+                        }
                     });
                 } else {
-                    proceedToBotTurns();
+                    // Not playable — keep in hand
+                    card.makeInteractive();
+                    this.refanCards(localPlayer);
+
+                    const proceedToBotTurns = () => {
+                        this.scheduleTimer(300, () => {
+                            this.moveExecutor.executeMoves(botTurns, () => {
+                                this.syncState();
+                                this._checkBotWin(result);
+                                this.enablePlayerTurn();
+                            });
+                        });
+                    };
+
+                    // Reshuffle animation plays after the draw that emptied the deck
+                    if (result.reshuffled) {
+                        this.scheduleTimer(200, () => {
+                            this._animateReshuffle(result.deckCountAfterReshuffle)
+                                .then(proceedToBotTurns);
+                        });
+                    } else {
+                        proceedToBotTurns();
+                    }
                 }
             });
         }, { depth: cardDepth, slideDuration: ANIMATION.PENALTY_SLIDE_DURATION });
@@ -2147,6 +2234,67 @@ export class GameScene extends Phaser.Scene {
                 ease: 'Power2',
                 onComplete: () => p.destroy(),
             });
+        });
+    }
+
+    _fxWinningCard(card) {
+        const cfg = POWER_CARD_FX.WINNING_CARD;
+
+        // Central golden phantom — scales up large with half-spin
+        const center = this._createPhantom(card, cfg.CENTER_TINT);
+        this.tweens.add({
+            targets: center,
+            scaleX: center.scaleX * cfg.CENTER_SCALE,
+            scaleY: center.scaleY * cfg.CENTER_SCALE,
+            rotation: center.rotation + cfg.CENTER_SPIN,
+            alpha: 0,
+            duration: cfg.CENTER_DURATION,
+            ease: 'Power2',
+            onComplete: () => center.destroy(),
+        });
+
+        // Ring of phantoms radiating outward
+        for (let i = 0; i < cfg.BURST_COUNT; i++) {
+            const angle = (Math.PI * 2 / cfg.BURST_COUNT) * i;
+            const p = this._createPhantom(card, cfg.BURST_TINT);
+            this.tweens.add({
+                targets: p,
+                x: p.x + Math.cos(angle) * cfg.BURST_SPREAD,
+                y: p.y + Math.sin(angle) * cfg.BURST_SPREAD,
+                scaleX: p.scaleX * cfg.BURST_SCALE,
+                scaleY: p.scaleY * cfg.BURST_SCALE,
+                alpha: 0,
+                duration: cfg.BURST_DURATION,
+                delay: 80,
+                ease: 'Power2',
+                onComplete: () => p.destroy(),
+            });
+        }
+
+        // Brief white screen flash
+        const cam = this.cameras.main;
+        const flash = this.add.graphics();
+        flash.fillStyle(0xffffff, 1);
+        flash.fillRect(0, 0, cam.width, cam.height);
+        flash.setAlpha(0);
+        flash.setDepth(card.depth + 20);
+
+        this.tweens.add({
+            targets: flash,
+            alpha: cfg.FLASH_ALPHA,
+            duration: 60,
+            yoyo: true,
+            hold: 40,
+            ease: 'Sine.easeIn',
+            onComplete: () => {
+                this.tweens.add({
+                    targets: flash,
+                    alpha: 0,
+                    duration: cfg.FLASH_DURATION,
+                    ease: 'Sine.easeOut',
+                    onComplete: () => flash.destroy(),
+                });
+            },
         });
     }
 
@@ -2359,10 +2507,82 @@ export class GameScene extends Phaser.Scene {
     }
 
     /**
+     * Debug button to trigger game over manually. Controlled by DEBUG_GAME_OVER_BUTTON in settings.
+     */
+    _createDebugGameOverButton() {
+        if (!DEBUG_GAME_OVER_BUTTON) return;
+
+        // Remove existing debug button if any
+        if (this._debugGameOverBtn) {
+            this._debugGameOverBtn.destroy();
+            this._debugGameOverBtn = null;
+        }
+
+        const btn = this.add.text(1250, 15, 'GAME OVER', {
+            fontSize: '18px',
+            fontFamily: 'Nunito, Arial',
+            fontStyle: 'bold',
+            color: '#fff',
+            backgroundColor: '#cc3333',
+            padding: { x: 12, y: 6 },
+        });
+        btn.setOrigin(1, 0);
+        btn.setDepth(200);
+        btn.setInteractive({ useHandCursor: true });
+        btn.setAlpha(0.8);
+
+        btn.on('pointerover', () => btn.setAlpha(1));
+        btn.on('pointerout', () => btn.setAlpha(0.8));
+        btn.on('pointerdown', () => {
+            btn.destroy();
+            this._debugGameOverBtn = null;
+            // Trigger game over with random winner (0 = player win, 1-3 = bot win)
+            const winner = Math.floor(Math.random() * 4);
+            this._handleGameOver(winner);
+        });
+
+        this._debugGameOverBtn = btn;
+    }
+
+    /**
      * Handle game over state.
      */
     _handleGameOver(winnerIndex) {
         this.disablePlayerTurn();
+        this.moveExecutor.cancel();
+        if (this.emoteSystem) this.emoteSystem.stopAllEmotes();
+
+        // Phase 1: Let the winning card settle — brief pause (1s)
+        this.scheduleTimer(1000, () => {
+            // Phase 2: Smoothly fade out game UI over 600ms
+            const fadeTargets = [
+                this.passButton.sprite, this.passButton.shadow,
+                this.unoButton.sprite, this.unoButton.shadow,
+                this.directionArrow.sprite,
+                this.visualDeck,
+            ];
+
+            // Also fade non-winner avatars
+            this.playerManager.playerAvatars.forEach((avatar, i) => {
+                if (i !== winnerIndex) fadeTargets.push(avatar);
+            });
+
+            this.directionArrow.stopIdle();
+
+            this.tweens.add({
+                targets: fadeTargets,
+                alpha: 0,
+                duration: 600,
+                ease: 'Sine.easeIn',
+                onComplete: () => {
+                    // Phase 3: Start the game-over overlay
+                    GameOverOverlay.show(this, winnerIndex, () => {
+                        this._skipTapToStart = true;
+                        this.handleRestart();
+                    });
+                },
+            });
+        });
     }
 
     /**
