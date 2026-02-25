@@ -4,11 +4,12 @@ Unlike regular altruistic, this agent can DRAW (pass) even with playable cards.
 It learns WHEN passing is worth the penalty cost — e.g., right before seat 0's
 turn when the current top card matches seat 0's likely hand.
 
-Reward: +3 when seat 0 wins, -1 when the agent itself wins,
--0.5 when another bot wins, MINUS 1.0 per voluntary draw (cumulative).
+Reward: +2 when seat 0 wins, -1 when the agent itself wins,
+-1 when another bot wins, MINUS 0.5 per voluntary draw (cumulative).
 
-This creates selective passing behavior: 1-2 strategic passes per game max,
-otherwise the penalties outweigh the win bonus.
+Slightly stronger "help seat 0" signal than altruistic, with voluntary draw
+available. The pass penalty prevents spam while letting the DQN learn
+the optimal number of strategic passes.
 
 Target seat plane (plane 11) is always set to seat 0.
 Voluntary draw flag is enabled so 'draw' is always a legal action.
@@ -45,11 +46,11 @@ from simulator.config.training import (
 
 HYPER_ALTRUISTIC_DIR = os.path.join(MODEL_DIR, "hyper_altruistic")
 
-# Reward tuning
-WIN_BONUS = 3.0        # +3 when seat 0 wins
+# Reward tuning (stronger help signal + moderate pass penalty)
+WIN_BONUS = 2.0        # +2 when seat 0 wins
 SELF_WIN_PENALTY = -1.0
-OTHER_WIN_PENALTY = -0.5
-PASS_PENALTY = -1.0     # -1 per voluntary draw (cumulative over game)
+OTHER_WIN_PENALTY = -1.0
+PASS_PENALTY = -0.5     # -0.5 per voluntary draw (cumulative over game)
 
 # Draw action ID in RLCard UNO (action 60 = 'draw')
 DRAW_ACTION_ID = 60
@@ -176,8 +177,8 @@ def train(fresh=False):
     # Create game and agents
     game = UnoGame()
 
-    # Enable voluntary draw (hyper altruistic can pass with playable cards)
-    game.set_allow_voluntary_draw(True)
+    # Voluntary draw is already enabled by default (True in UnoGame)
+    # Hyper altruistic learns WHEN to pass via the -1 per pass penalty
 
     # Create the RL agent — load checkpoint if resuming
     if checkpoint_path:

@@ -1,7 +1,7 @@
 """Train an altruistic agent: learns to help seat 0 (the human player) win.
 
 Custom reward: +1 when seat 0 wins, -1 when the agent itself wins,
--0.5 when another bot wins.
+-1 when another bot wins.
 
 Target seat plane (plane 11) is always set to seat 0.
 
@@ -58,7 +58,7 @@ def altruistic_reward(payoffs: list, seat: int) -> float:
     elif winner == seat:
         return -1.0   # This bot won — bad, we were supposed to help seat 0
     else:
-        return -0.5   # Another bot won — still failed but less our fault
+        return -1.0   # Another bot won — failed to protect seat 0
 
 
 def evaluate(game: UnoGame, num_games: int) -> dict:
@@ -152,6 +152,10 @@ def train(fresh: bool = False):
 
     # Always target seat 0
     game.set_target_seat(PLAYER_SEAT)
+
+    # Altruistic helps by playing smart cards, not by passing
+    # (voluntary draw disabled — differentiates from hyper altruistic)
+    game.set_allow_voluntary_draw(False)
 
     # Training loop
     for episode in range(start_episode, NUM_EPISODES + 1):

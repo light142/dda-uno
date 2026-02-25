@@ -268,13 +268,8 @@ def _enriched_extract_state(env, state):
         obs[11, target_seat % 4, :] = 1
 
     # Build full state dict (raw_obs unchanged — API uses this)
+    # Note: voluntary draw is handled at env._get_legal_actions level
     legal_action_id = env._get_legal_actions()
-
-    # Hyper altruistic: allow draw even with playable cards
-    if getattr(env, '_allow_voluntary_draw', False):
-        draw_id = env._ACTION_SPACE.get('draw')
-        if draw_id is not None and draw_id not in legal_action_id:
-            legal_action_id[draw_id] = None
 
     extracted_state = {'obs': obs, 'legal_actions': legal_action_id}
     extracted_state['raw_obs'] = state
@@ -317,7 +312,20 @@ class UnoGame:
             self.env, state
         )
         self.env._target_seat = None
-        self.env._allow_voluntary_draw = False
+        self.env._allow_voluntary_draw = True
+
+        # Patch _get_legal_actions to support voluntary draw at the env level.
+        # This ensures both state extraction AND action decoding see draw as legal.
+        _original_get_legal = self.env._get_legal_actions
+        _env_ref = self.env
+
+        def _get_legal_with_voluntary_draw():
+            legal = _original_get_legal()
+            if getattr(_env_ref, '_allow_voluntary_draw', False) and 60 not in legal:
+                legal[60] = None
+            return legal
+
+        self.env._get_legal_actions = _get_legal_with_voluntary_draw
         self._agents = None
 
     def set_target_seat(self, seat=None):
@@ -330,10 +338,11 @@ class UnoGame:
         self.env._target_seat = seat
 
     def set_allow_voluntary_draw(self, allow: bool = True):
-        """Allow agents to draw even with playable cards (hyper altruistic).
+        """Control whether agents can draw even with playable cards.
 
-        When enabled, 'draw' is added to legal actions for every decision,
-        so agents can choose to pass their turn by drawing a card.
+        Default is True (realistic UNO rules). Set False for altruistic
+        and cooperative training to force them to help by playing smart
+        cards rather than passing.
         """
         self.env._allow_voluntary_draw = allow
 

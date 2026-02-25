@@ -256,8 +256,10 @@ def encode_game_state(
     if target_seat is not None:
         obs[11, target_seat % 4, :] = 1
 
-    # Legal actions
+    # Legal actions (voluntary draw always available — realistic UNO rules)
     legal = get_legal_action_ids(hand, top_card, active_color)
+    if 60 not in legal:
+        legal[60] = None
 
     return {
         "obs": obs,

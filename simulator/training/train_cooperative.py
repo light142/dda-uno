@@ -1,7 +1,7 @@
 """Train a cooperative agent: learns to help a designated bot teammate win.
 
 Custom reward: +1 when target seat wins, -1 when the agent itself wins,
--0.5 when another seat wins.
+-1 when another seat wins.
 
 Target seat plane (plane 11) rotates among bot seats (1, 2, 3) each episode.
 This trains a universal "help any bot" model used in hyper adversarial tier,
@@ -54,7 +54,7 @@ def cooperative_reward(payoffs: list, seat: int, target_seat: int) -> float:
     elif winner == seat:
         return -1.0   # This bot won — bad, we were supposed to help target
     else:
-        return -0.5   # Another seat won — still failed but less our fault
+        return -1.0   # Another seat won — failed to protect target
 
 
 def create_seat0_opponent(opponent_type: str):
@@ -157,6 +157,9 @@ def train(fresh: bool = False):
         agents[seat] = rl_agent.agent
 
     game.set_agents(agents)
+
+    # Cooperative helps by playing smart cards, not by passing
+    game.set_allow_voluntary_draw(False)
 
     # Training loop
     for episode in range(start_episode, NUM_EPISODES + 1):
