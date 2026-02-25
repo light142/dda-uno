@@ -1,6 +1,6 @@
 # UNO Backend API Design
 
-Single-player UNO (1 human + 3 bots) with server-side game logic, Google OAuth, and persistent stats.
+Single-player UNO (1 human + 3 bots) with server-side game logic, email/password auth, and persistent stats.
 
 **Base URL:** `/api`
 **Auth:** All endpoints (except auth) require `Authorization: Bearer <accessToken>`
@@ -12,7 +12,6 @@ Single-player UNO (1 human + 3 bots) with server-side game logic, Google OAuth, 
 - [Auth Endpoints](#auth-endpoints)
 - [Game State Shape](#common-game-state-shape)
 - [Game Endpoints](#game-endpoints)
-- [UNO Callout](#uno-callout)
 - [User Endpoints](#user-profile--stats-endpoints)
 - [Data Models](#data-models)
 - [Error Format](#error-response-format)
@@ -21,50 +20,75 @@ Single-player UNO (1 human + 3 bots) with server-side game logic, Google OAuth, 
 
 ## Auth Endpoints
 
-### `POST /api/auth/google`
+### `POST /api/auth/register`
 
-Exchange Google OAuth token for app session. Creates account on first login, returns existing user on subsequent logins.
+Create a new account with email, password, and username. Returns tokens and user profile.
 
 **Request:**
 ```json
 {
-  "idToken": "google-id-token..."
+  "email": "player@example.com",
+  "password": "secret123",
+  "username": "PlayerOne"
 }
 ```
 
-**Response (200):**
+**Response (201):**
 ```json
 {
+  "tokens": {
+    "access_token": "jwt...",
+    "refresh_token": "jwt...",
+    "token_type": "bearer"
+  },
   "user": {
     "id": "uuid",
-    "username": "LuckyTiger42",
-    "email": "user@gmail.com",
-    "avatarUrl": "https://...",
-    "createdAt": "2026-02-12T10:00:00Z"
-  },
-  "accessToken": "jwt...",
-  "refreshToken": "jwt..."
+    "email": "player@example.com",
+    "username": "PlayerOne",
+    "games_played": 0,
+    "wins": 0,
+    "win_rate": 0.0,
+    "bot_strength": 0.5,
+    "created_at": "2026-02-12T10:00:00Z"
+  }
 }
 ```
+
+### `POST /api/auth/login`
+
+Authenticate with email and password.
+
+**Request:**
+```json
+{
+  "email": "player@example.com",
+  "password": "secret123"
+}
+```
+
+**Response (200):** Same shape as register response.
 
 ### `POST /api/auth/refresh`
 
 **Request:**
 ```json
 {
-  "refreshToken": "jwt..."
+  "refresh_token": "jwt..."
 }
 ```
 
 **Response (200):**
 ```json
 {
-  "accessToken": "jwt...",
-  "refreshToken": "jwt..."
+  "access_token": "jwt...",
+  "refresh_token": "jwt...",
+  "token_type": "bearer"
 }
 ```
 
 ### `POST /api/auth/logout`
+
+Stateless logout — client should discard its tokens.
 
 **Response (204):** No content
 
@@ -92,37 +116,23 @@ All game endpoints return the same `gameState` structure. This is the single sou
   "activeColor": "green",
   "isClockwise": true,
   "deckRemaining": 72,
-  "winner": null,
-  "unoPenalty": null
+  "currentPlayer": 0,
+  "winner": null
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | gameId | UUID | Game session ID |
-| status | `"in_progress" \| "finished"` | Game status |
+| status | `"in_progress" \| "finished" \| "abandoned"` | Game status |
 | playerHands | `[Card[], int, int, int]` | Human gets full card array, bots get card count only |
-| topCard | Card | Current top card on discard pile |
+| topCard | Card \| null | Current top card on discard pile |
 | discardPile | Card[] | Full discard pile (newest last) |
-| activeColor | string | Active color (may differ from topCard.suit for wilds) |
+| activeColor | string \| null | Active color (may differ from topCard.suit for wilds) |
 | isClockwise | boolean | Play direction |
 | deckRemaining | int | Cards left in draw pile |
-| winner | `int \| null` | Winning playerIndex when game ends, else null |
-| unoPenalty | `UnoPenalty \| null` | Penalty info if someone failed to call UNO |
-
-### UnoPenalty Object
-
-Included when a player is caught not calling UNO.
-
-```json
-{
-  "penalizedPlayer": 0,
-  "calledOutBy": 2,
-  "drawnCards": [{ "suit": "red", "value": "3" }, { "suit": "blue", "value": "8" }]
-}
-```
-
-> For bot penalties, `drawnCards` is an `int` (count only, cards stay hidden).
+| currentPlayer | int | Seat index of the current player (0-3) |
+| winner | `int \| null` | Winning seat index when game ends, else null |
 
 ---
 
@@ -135,97 +145,21 @@ Start a new game. No request body — server uses defaults (4 players, 7 cards e
 **Response (201):**
 ```json
 {
-  "gameState": { "..." }
+  "gameState": { "..." },
+  "modelInfo": { "version": "1.0.0", "trainedAt": "2026-02-24T10:00:00Z" }
 }
 ```
 
 ---
 
-### `POST /api/games/:gameId/play`
+### `GET /api/games/active`
 
-Human plays a card. Server validates, processes effects, runs all bot turns, then returns updated state.
-
-**Request:**
-```json
-{
-  "card": { "suit": "red", "value": "5" },
-  "chosenColor": null,
-  "calledUno": false,
-  "pendingCallouts": []
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| card | Card | Yes | The card to play |
-| chosenColor | string \| null | For wild/plus4 | Color choice: `"red" \| "blue" \| "green" \| "yellow"` |
-| calledUno | boolean | Yes | Whether the player pressed UNO before submitting |
-| pendingCallouts | int[] | No | Bot playerIndexes that were called out but the `/callout` API failed (piggybacked here for reliability) |
+Check for an in-progress game (for reconnection after page reload).
 
 **Response (200):**
 ```json
 {
-  "valid": true,
-  "botTurns": [
-    {
-      "playerIndex": 1,
-      "action": "play",
-      "card": { "suit": "red", "value": "block" },
-      "drawnCards": 0,
-      "chosenColor": null,
-      "forgotUno": false
-    },
-    {
-      "playerIndex": 2,
-      "action": "draw",
-      "card": null,
-      "drawnCards": 1,
-      "chosenColor": null,
-      "forgotUno": false
-    },
-    {
-      "playerIndex": 3,
-      "action": "play",
-      "card": { "suit": "red", "value": "9" },
-      "drawnCards": 0,
-      "chosenColor": null,
-      "forgotUno": true
-    }
-  ],
-  "gameState": { "..." }
-}
-```
-
-**Error (400):**
-```json
-{
-  "valid": false,
-  "error": "Card is not playable on current top card"
-}
-```
-
----
-
-### `POST /api/games/:gameId/pass`
-
-Human draws a card and passes.
-
-**Request (optional):**
-```json
-{
-  "pendingCallouts": []
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| pendingCallouts | int[] | No | Bot playerIndexes from failed `/callout` calls (piggybacked for reliability) |
-
-**Response (200):**
-```json
-{
-  "drawnCard": { "suit": "yellow", "value": "2" },
-  "botTurns": [],
+  "hasActiveGame": true,
   "gameState": { "..." }
 }
 ```
@@ -245,6 +179,82 @@ Get current game state (for reconnection / page refresh).
 
 ---
 
+### `POST /api/games/:gameId/play`
+
+Human plays a card. Server validates, processes effects, runs all bot turns, then returns updated state.
+
+**Request:**
+```json
+{
+  "card": { "suit": "red", "value": "5" },
+  "chosenColor": null
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| card | Card | Yes | The card to play |
+| chosenColor | string \| null | For wild/plus4 | Color choice: `"red" \| "blue" \| "green" \| "yellow"` |
+
+**Response (200):**
+```json
+{
+  "valid": true,
+  "botTurns": [
+    {
+      "playerIndex": 1,
+      "action": "play",
+      "card": { "suit": "red", "value": "block" },
+      "drawnCards": 0,
+      "chosenColor": null
+    },
+    {
+      "playerIndex": 2,
+      "action": "draw",
+      "card": null,
+      "drawnCards": 1,
+      "chosenColor": null
+    }
+  ],
+  "gameState": { "..." }
+}
+```
+
+**Error (400):**
+```json
+{
+  "valid": false,
+  "error": "Card is not playable on current top card"
+}
+```
+
+---
+
+### `POST /api/games/:gameId/pass`
+
+Human draws a card and passes. If the drawn card matches, RLCard may auto-play it.
+
+**Response (200):**
+```json
+{
+  "drawnCard": { "suit": "yellow", "value": "2" },
+  "autoPlayed": false,
+  "chosenColor": null,
+  "botTurns": [],
+  "gameState": { "..." }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| drawnCard | Card \| null | The card drawn from the deck |
+| autoPlayed | boolean | Whether the drawn card was auto-played (RLCard draw quirk) |
+| chosenColor | string \| null | Color chosen if an auto-played wild |
+| botTurns | BotTurn[] | Bot turns that follow |
+| gameState | GameState | Updated game state |
+
+---
+
 ## Bot Turn Object
 
 Each entry in `botTurns` represents one bot's complete turn.
@@ -255,75 +265,53 @@ Each entry in `botTurns` represents one bot's complete turn.
   "action": "play",
   "card": { "suit": "red", "value": "block" },
   "drawnCards": 0,
-  "chosenColor": null,
-  "forgotUno": false
+  "chosenColor": null
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| playerIndex | int (1-3) | Which bot |
+| playerIndex | int (0-3) | Which player (0 for human penalty draws) |
 | action | `"play" \| "draw"` | What the bot did |
 | card | `Card \| null` | Card played (null if draw) |
-| drawnCards | int | Number of cards drawn (0 if played) |
+| drawnCards | `int \| Card[]` | Count for bots, card array for human penalty draws |
 | chosenColor | `string \| null` | Color chosen for wild/plus4 |
-| forgotUno | boolean | True if bot has 1 card left and "forgot" to call UNO (callable by human) |
 
 ---
 
-## UNO Callout
+## Debug Endpoints (Testing Only)
 
-### `POST /api/games/:gameId/callout`
+### `PUT /api/games/debug/cards`
 
-Human calls out a bot for not saying UNO. Must be sent within the callout timer window.
+Set fixed cards for testing (starter card, active color, player hands).
 
-**Request:**
-```json
-{
-  "playerIndex": 2
-}
-```
+### `GET /api/games/debug/cards`
+
+Retrieve current debug card configuration.
+
+### `DELETE /api/games/debug/cards`
+
+Clear debug card overrides.
+
+---
+
+## Other Endpoints
+
+### `GET /api/models/info`
+
+Get model version and training metadata from `models/manifest.json`.
 
 **Response (200):**
 ```json
 {
-  "success": true,
-  "unoPenalty": {
-    "penalizedPlayer": 2,
-    "calledOutBy": 0,
-    "drawnCards": 2
-  },
-  "gameState": { "..." }
+  "version": "1.0.0",
+  "trainedAt": "2026-02-24T10:00:00Z"
 }
 ```
 
-**Error (400):**
-```json
-{
-  "success": false,
-  "error": "Callout window expired"
-}
-```
+### `GET /health`
 
-### Callout Flow
-
-**Human forgets UNO (bot calls out human):**
-1. Human plays a card via `/play` with `calledUno: false`
-2. Server checks: if human has 1 card left and didn't call UNO, a random bot may call them out
-3. If called out: server adds 2 penalty cards to human's hand, returns `unoPenalty` in gameState
-4. Client animates: bot calls out "UNO!", human draws 2 cards
-5. If `calledUno: true`: no penalty
-
-**Bot forgets UNO (human calls out bot):**
-1. Bot plays a card leaving it with 1 card — server randomly decides if the bot "forgot"
-2. That bot's entry in `botTurns` has `forgotUno: true`
-3. UNO button remains always visible (no special visual hint — player must notice)
-4. Client tracks which bots are callable; window is valid until the next play/draw action
-5. If player presses UNO button while a callable bot exists:
-   - Client immediately plays a "stamp UNO" animation on the bot + deals 2 face-down cards (optimistic)
-   - Client fires `POST /games/:gameId/callout` in the background (fire-and-forget)
-6. If `/callout` API fails (network timeout): the callout is queued and piggybacked on the next `/play` or `/pass` request via `pendingCallouts` field
-7. If player doesn't notice: opportunity lost, game continues normally
+Health check endpoint.
 
 ---
 
@@ -335,17 +323,15 @@ Human calls out a bot for not saying UNO. Must be sent within the callout timer 
 ```json
 {
   "id": "uuid",
-  "username": "LuckyTiger42",
-  "email": "user@gmail.com",
-  "avatarUrl": "https://...",
+  "username": "PlayerOne",
+  "email": "player@example.com",
   "stats": {
     "gamesPlayed": 42,
     "gamesWon": 18,
     "winRate": 0.4286,
-    "currentStreak": 3,
-    "bestStreak": 7
-  },
-  "createdAt": "2026-02-12T10:00:00Z"
+    "currentBotStrength": 0.63,
+    "targetWinRate": 0.50
+  }
 }
 ```
 
@@ -359,9 +345,15 @@ Human calls out a bot for not saying UNO. Must be sent within the callout timer 
   "games": [
     {
       "gameId": "uuid",
+      "status": "finished",
       "result": "win",
-      "finishedAt": "2026-02-12T10:30:00Z",
-      "turns": 23
+      "botStrengthStart": 0.55,
+      "botStrengthEnd": 0.58,
+      "playerWinRate": 0.52,
+      "turns": 23,
+      "modelVersion": "1.0.0",
+      "finishedAt": "2026-02-24T10:30:00",
+      "createdAt": "2026-02-24T10:25:00"
     }
   ],
   "pagination": {
@@ -369,6 +361,17 @@ Human calls out a bot for not saying UNO. Must be sent within the callout timer 
     "limit": 10,
     "total": 42
   }
+}
+```
+
+### `DELETE /api/users/me/history`
+
+Reset all game stats and history for the current user.
+
+**Response (200):**
+```json
+{
+  "message": "History cleared"
 }
 ```
 
@@ -380,25 +383,32 @@ Human calls out a bot for not saying UNO. Must be sent within the callout timer 
 
 | Field | Type |
 |-------|------|
-| id | UUID (PK) |
-| googleId | string (unique) |
-| username | string |
+| id | CHAR(36) (PK, UUID) |
 | email | string (unique) |
-| avatarUrl | string |
-| createdAt | datetime |
+| username | string |
+| password_hash | string |
+| games_played | int (default 0) |
+| wins | int (default 0) |
+| bot_strength | float (default 0.5) |
+| target_win_rate | float (default 0.5) |
+| created_at | datetime |
 
 ### Game
 
 | Field | Type |
 |-------|------|
-| id | UUID (PK) |
-| userId | UUID (FK → User) |
-| status | enum: `in_progress`, `finished` |
-| state | JSON (serialized game state) |
-| winner | int or null (playerIndex) |
+| id | CHAR(36) (PK, UUID) |
+| user_id | CHAR(36) (FK -> User) |
+| status | string: `in_progress`, `finished`, `abandoned` |
+| state_json | text (serialized game state) |
+| winner | int or null (seat index 0-3) |
 | turns | int |
-| createdAt | datetime |
-| finishedAt | datetime or null |
+| bot_strength_start | float |
+| bot_strength_end | float or null |
+| player_win_rate_at_game | float or null |
+| model_version | string or null |
+| created_at | datetime |
+| finished_at | datetime or null |
 
 ### Card
 
@@ -417,22 +427,20 @@ Human calls out a bot for not saying UNO. Must be sent within the callout timer 
 
 ```json
 {
-  "error": "Human-readable message",
-  "code": "INVALID_PLAY"
+  "detail": "Human-readable message"
 }
 ```
 
 | HTTP Code | Usage |
 |-----------|-------|
 | 200 | Success |
-| 201 | Resource created (new game) |
+| 201 | Resource created (register, new game) |
 | 204 | No content (logout) |
 | 400 | Invalid request / play |
 | 401 | Unauthorized (missing/expired token) |
-| 403 | Forbidden (not your game) |
 | 404 | Game not found |
-| 409 | Conflict (e.g. game already finished) |
-| 422 | Validation error |
+| 409 | Conflict (duplicate email) |
+| 422 | Validation error (Pydantic) |
 | 500 | Server error |
 
 ---
@@ -441,13 +449,20 @@ Human calls out a bot for not saying UNO. Must be sent within the callout timer 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/auth/google` | Google OAuth login/register |
+| POST | `/api/auth/register` | Register with email + password |
+| POST | `/api/auth/login` | Login with email + password |
 | POST | `/api/auth/refresh` | Refresh access token |
-| POST | `/api/auth/logout` | Logout |
+| POST | `/api/auth/logout` | Logout (stateless) |
 | POST | `/api/games` | Start new game |
+| GET | `/api/games/active` | Check for in-progress game |
 | GET | `/api/games/:gameId` | Get game state |
 | POST | `/api/games/:gameId/play` | Play a card |
 | POST | `/api/games/:gameId/pass` | Draw & pass |
-| POST | `/api/games/:gameId/callout` | Call out a bot's UNO |
+| PUT | `/api/games/debug/cards` | Set debug cards (testing) |
+| GET | `/api/games/debug/cards` | Get debug card config |
+| DELETE | `/api/games/debug/cards` | Clear debug cards |
 | GET | `/api/users/me` | Get profile & stats |
 | GET | `/api/users/me/history` | Get game history |
+| DELETE | `/api/users/me/history` | Reset stats & history |
+| GET | `/api/models/info` | Model version info |
+| GET | `/health` | Health check |

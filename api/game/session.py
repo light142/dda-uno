@@ -19,7 +19,6 @@ from .cards import Card, is_wild, is_valid_play, pick_best_color, get_playable_c
 from .rlcard_bridge import (
     card_to_action_id, action_id_to_card,
     rlcard_card_to_api, api_card_to_rlcard,
-    encode_game_state,
     ACTION_LIST, ACTION_TO_ID,
     RL_TO_COLOR, COLOR_TO_RL,
 )
@@ -37,6 +36,7 @@ class GameSession:
         self.num_players = NUM_PLAYERS
         self.current_player = 0
         self.turns = 0
+        self._action_log = []  # [(player_id, action_str), ...] mirrors env.action_recorder
 
     # ------------------------------------------------------------------
     # Game lifecycle
@@ -86,6 +86,7 @@ class GameSession:
 
         # Step the RLCard game
         game.step(action_str)
+        self._action_log.append((player_index, action_str))
         self.turns += 1
 
         # Check for winner
@@ -134,6 +135,7 @@ class GameSession:
 
         if not game.dealer.deck:
             # No cards left at all — just advance
+            self._action_log.append((player_index, "draw"))
             self.turns += 1
             self.current_player = self._next_player(player_index)
             game.round.current_player = self.current_player
@@ -166,6 +168,8 @@ class GameSession:
 
             hand_sizes_before = [len(p.hand) for p in game.players]
             game.step(action_str)
+            # Record as "draw" to match training (auto-play is invisible to action_recorder)
+            self._action_log.append((player_index, "draw"))
             self.turns += 1
 
             penalty_draw = self._detect_penalty(
@@ -190,6 +194,7 @@ class GameSession:
         else:
             # Not playable — keep in hand and advance turn
             game.players[player_index].hand.append(rl_card)
+            self._action_log.append((player_index, "draw"))
             self.turns += 1
 
             self.current_player = self._next_player(player_index)
@@ -229,12 +234,22 @@ class GameSession:
                 game.round.current_player = self.current_player
                 continue
 
-            # Get bot decision via callback
+            # Get bot decision via callback (with enriched game context)
             hand_cards = [rlcard_card_to_api(c) for c in hand]
             top_card = rlcard_card_to_api(game.round.target)
             active_color = self._get_active_color()
 
-            card, chosen_color = bot_decision_fn(p, hand_cards, top_card, active_color)
+            context = {
+                "bot_seat": p,
+                "hand_sizes": [len(pl.hand) for pl in game.players],
+                "direction": game.round.direction,
+                "played_cards": game.round.played_cards,
+                "deck_remaining": len(game.dealer.deck),
+                "action_log": self._action_log,
+            }
+
+            card, chosen_color = bot_decision_fn(
+                p, hand_cards, top_card, active_color, **context)
 
             if card is not None:
                 # Bot plays a card — step RLCard
@@ -245,6 +260,7 @@ class GameSession:
                 hand_sizes_before = [len(pl.hand) for pl in game.players]
 
                 game.step(action_str)
+                self._action_log.append((p, action_str))
                 self.turns += 1
 
                 bot_turns.append({
@@ -287,6 +303,7 @@ class GameSession:
                 hand_sizes_before = [len(pl.hand) for pl in game.players]
 
                 game.step("draw")
+                self._action_log.append((p, "draw"))
                 self.turns += 1
 
                 target_after = game.round.target
@@ -399,6 +416,7 @@ class GameSession:
             "is_clockwise": game.round.direction == 1,
             "current_player": self.current_player,
             "turns": self.turns,
+            "action_log": self._action_log,
         }
 
     @classmethod
@@ -447,6 +465,9 @@ class GameSession:
 
         session.current_player = data.get("current_player", 0)
         session.turns = data.get("turns", 0)
+        session._action_log = [
+            tuple(rec) for rec in data.get("action_log", [])
+        ]
 
         return session
 

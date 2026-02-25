@@ -113,12 +113,37 @@ def card_to_action_id(card: Card, chosen_color: Optional[str] = None) -> int:
     return ACTION_TO_ID.get(action_str, 60)
 
 
-def encode_game_state(hand: list[Card], top_card: Card, active_color: str) -> dict:
-    """Build RLCard-compatible state dict for querying trained agents.
+def encode_game_state(
+    hand: list[Card],
+    top_card: Card,
+    active_color: str,
+    *,
+    bot_seat: int = 1,
+    hand_sizes: list[int] = None,
+    direction: int = 1,
+    played_cards: list = None,
+    deck_remaining: int = 50,
+    action_log: list = None,
+    target_seat: int = None,
+) -> dict:
+    """Build RLCard-compatible enriched state dict for querying trained agents.
 
-    Returns dict with 'obs' (numpy [4,4,15]) and 'legal_actions' (OrderedDict).
+    Returns dict with 'obs' (numpy matching STATE_SHAPE) and 'legal_actions'.
+
+    Args:
+        hand: Bot's hand cards.
+        top_card: Current top card on discard pile.
+        active_color: Current active color.
+        bot_seat: This bot's seat index (for seat identity plane).
+        hand_sizes: List of hand sizes per player [p0, p1, p2, p3].
+        direction: Play direction (+1 clockwise, -1 counter-clockwise).
+        played_cards: List of RLCard UnoCard objects from discard pile.
+        deck_remaining: Cards remaining in draw pile.
+        action_log: List of (player_id, action_str) tuples from session.
+        target_seat: Which seat this agent should help win (None = no target).
     """
-    obs = np.zeros((4, 4, 15), dtype=np.float32)
+    from engine.config.game import STATE_SHAPE, NUM_PLAYERS
+    obs = np.zeros(STATE_SHAPE, dtype=int)
 
     # Plane 0-2: encode hand
     card_counts: dict[str, int] = {}
@@ -133,7 +158,6 @@ def encode_game_state(hand: list[Card], top_card: Card, active_color: str) -> di
         ti = TRAITS.index(rl_trait)
 
         if rl_trait in ("wild", "wild_draw_4"):
-            # Wild cards: mark all color slots
             for c in range(4):
                 obs[min(count, 2)][c][ti] = 1
         else:
@@ -146,6 +170,91 @@ def encode_game_state(hand: list[Card], top_card: Card, active_color: str) -> di
         ci = COLORS.index(rl_color)
         ti = TRAITS.index(rl_trait)
         obs[3][ci][ti] = 1
+
+    # Plane 4: Seat identity
+    obs[4, bot_seat % 4, :] = 1
+
+    # Plane 5: Card counts per player
+    if hand_sizes is None:
+        hand_sizes = [7] * NUM_PLAYERS
+    for i, count in enumerate(hand_sizes):
+        normalized = min(count / 15.0, 1.0)
+        obs[5, i % 4, :] = int(round(normalized * 14))
+
+    # Plane 6: Next player + direction
+    next_player = (bot_seat + direction) % NUM_PLAYERS
+    obs[6, next_player % 4, :] = 1
+    if direction == -1:
+        obs[6, :, 14] = 1
+
+    # Plane 7: Discard pile card counting
+    COLOR_MAP = {'r': 0, 'g': 1, 'b': 2, 'y': 3}
+    TRAIT_MAP = {
+        '0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6,
+        '7': 7, '8': 8, '9': 9, 'skip': 10, 'reverse': 11,
+        'draw_2': 12, 'wild': 13, 'wild_draw_4': 14,
+    }
+    MAX_COPIES = {
+        0: 1, 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2,
+        10: 2, 11: 2, 12: 2, 13: 1, 14: 1,
+    }
+    if played_cards:
+        discard_counts = {}
+        for rl_card in played_cards:
+            c = COLOR_MAP.get(rl_card.color)
+            t = TRAIT_MAP.get(rl_card.trait)
+            if c is not None and t is not None:
+                key = (c, t)
+                discard_counts[key] = discard_counts.get(key, 0) + 1
+        for (c, t), count in discard_counts.items():
+            max_c = MAX_COPIES.get(t, 2)
+            obs[7, c, t] = min(count, max_c)
+
+    # Plane 8: Last card played per player
+    # Plane 9: Draw vulnerability per target color
+    # Both reconstructed from action_log (mirrors env.action_recorder)
+    if action_log:
+        # Plane 8: last non-draw action per player
+        last_action_per_player = {}
+        for pid, action_str in action_log:
+            if isinstance(action_str, str) and action_str != 'draw':
+                last_action_per_player[pid] = action_str
+        for pid, card_str in last_action_per_player.items():
+            parts = card_str.split('-')
+            if len(parts) == 2:
+                color, trait = parts
+                c = COLOR_MAP.get(color)
+                t = TRAIT_MAP.get(trait)
+                if c is not None and t is not None:
+                    obs[8, pid % 4, t] = c + 1  # 1=r, 2=g, 3=b, 4=y
+
+        # Plane 9: draw counts per target color, reset on play
+        COLOR_IDX = {'r': 0, 'g': 1, 'b': 2, 'y': 3}
+        draw_per_color = {i: [0, 0, 0, 0] for i in range(NUM_PLAYERS)}
+        # Start tracking color from first discard card
+        tracking_color = None
+        if played_cards:
+            tracking_color = played_cards[0].color if hasattr(played_cards[0], 'color') else None
+        for pid, action_str in action_log:
+            if action_str == 'draw':
+                if tracking_color and tracking_color in COLOR_IDX:
+                    draw_per_color[pid][COLOR_IDX[tracking_color]] += 1
+            else:
+                draw_per_color[pid] = [0, 0, 0, 0]
+                parts = action_str.split('-')
+                if len(parts) == 2:
+                    tracking_color = parts[0]
+        for pid in range(NUM_PLAYERS):
+            for ci in range(4):
+                obs[9, pid % 4, ci] = min(draw_per_color[pid][ci], 14)
+
+    # Plane 10: Deck size
+    deck_val = min(int(deck_remaining / 8), 14)
+    obs[10, :, :] = deck_val
+
+    # Plane 11: Target seat (which seat to help win)
+    if target_seat is not None:
+        obs[11, target_seat % 4, :] = 1
 
     # Legal actions
     legal = get_legal_action_ids(hand, top_card, active_color)

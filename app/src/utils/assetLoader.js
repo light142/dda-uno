@@ -119,8 +119,6 @@ export function loadMainScreenAssets(scene) {
     scene.load.image('login_button', 'assets/images/buttons/login-button.png');
     scene.load.image('new_user_button', 'assets/images/buttons/new-user-button.png');
 
-    scene.load.spritesheet('emote_logo', 'assets/images/background/logo-sprite.png', { frameWidth: 240, frameHeight: 180 });
-
     // Decorative card faces
     const numberCards = { '7_red': 'red/7', '9_yellow': 'yellow/9' };
     const specialCards = { 'plus2_red': 'rp2', 'block_blue': 'bb', 'reverse_green': 'gr' };

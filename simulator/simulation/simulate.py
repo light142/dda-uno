@@ -127,8 +127,8 @@ def run_adaptive(num_games: int, bot_name: str) -> dict:
     # Check if trained models exist
     if not os.path.exists(STRONG_MODEL_PATH) or not os.path.exists(WEAK_MODEL_PATH):
         print("ERROR: Trained models not found. Run training first:")
-        print("  python -m simulator.training.train_strong")
-        print("  python -m simulator.training.train_weak")
+        print("  python -m simulator.training.train_adversarial")
+        print("  python -m simulator.training.train_altruistic")
         sys.exit(1)
 
     # Setup

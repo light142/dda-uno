@@ -93,10 +93,11 @@ def _model_info() -> ModelInfoSchema:
 def _make_decision_fn(agents: list, use_models: bool):
     """Create a bot decision callback for the session."""
     def decide(player_index: int, hand: list[Card],
-               top_card: Card, active_color: str):
+               top_card: Card, active_color: str, **context):
         if use_models and agents:
             agent = agents[player_index - 1]
-            return _bot_manager.get_bot_decision(agent, hand, top_card, active_color)
+            return _bot_manager.get_bot_decision(
+                agent, hand, top_card, active_color, **context)
         return _bot_manager.make_random_decision(hand, top_card, active_color)
     return decide
 

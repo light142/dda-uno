@@ -40,6 +40,7 @@ class RLAgent(BaseAgent):
             self._agent = DQNAgent(
                 num_actions=NUM_ACTIONS,
                 state_shape=STATE_SHAPE,
+                mlp_layers=kwargs.get('mlp_layers', [64, 64]),
                 replay_memory_size=kwargs.get('replay_memory_size', 20_000),
                 replay_memory_init_size=kwargs.get('replay_memory_init_size', 1_000),
                 update_target_estimator_every=kwargs.get('update_target_every', 1_000),

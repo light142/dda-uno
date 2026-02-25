@@ -4,13 +4,15 @@ Provides a clean interface for running UNO games with configurable agents
 at each seat. Used by training, simulation, and the API layer.
 """
 
+import numpy as np
 import rlcard
 from rlcard.games.uno.game import UnoGame as RLCardUnoGame
 from rlcard.games.uno.round import UnoRound
 from rlcard.games.uno.card import UnoCard
+from rlcard.games.uno.utils import encode_hand, encode_target, WILD, WILD_DRAW_4
 from rlcard.utils import reorganize
 
-from engine.config.game import NUM_PLAYERS, PLAYER_SEAT, NUM_ACTIONS, SEED
+from engine.config.game import NUM_PLAYERS, PLAYER_SEAT, NUM_ACTIONS, STATE_SHAPE, SEED
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +66,223 @@ def _patched_perform_draw_action(self, players):
 UnoRound._perform_draw_action = _patched_perform_draw_action
 
 
+# ---------------------------------------------------------------------------
+# Rule change: wild_draw_4 is always playable (no color restriction).
+#
+# In official UNO (and RLCard default), wild_draw_4 can only be played when
+# the player has NO cards matching the target color.  This patch removes that
+# restriction so wild_draw_4 is always a legal option — like regular wilds.
+# This gives bots (and the human) more strategic freedom.
+# ---------------------------------------------------------------------------
+
+_original_get_legal_actions = UnoRound.get_legal_actions
+
+
+def _patched_get_legal_actions(self, players, player_id):
+    wild_flag = 0
+    wild_draw_4_flag = 0
+    legal_actions = []
+    hand = players[player_id].hand
+    target = self.target
+
+    if target.type == 'wild':
+        for card in hand:
+            if card.type == 'wild':
+                if card.trait == 'wild_draw_4':
+                    if wild_draw_4_flag == 0:
+                        wild_draw_4_flag = 1
+                elif wild_flag == 0:
+                    wild_flag = 1
+                    legal_actions.extend(WILD)
+            elif card.color == target.color:
+                legal_actions.append(card.str)
+    else:
+        for card in hand:
+            if card.type == 'wild':
+                if card.trait == 'wild_draw_4':
+                    if wild_draw_4_flag == 0:
+                        wild_draw_4_flag = 1
+                elif wild_flag == 0:
+                    wild_flag = 1
+                    legal_actions.extend(WILD)
+            elif card.color == target.color or card.trait == target.trait:
+                legal_actions.append(card.str)
+
+    # Always include wild_draw_4 when held (no color restriction)
+    if wild_draw_4_flag:
+        legal_actions.extend(WILD_DRAW_4)
+
+    if not legal_actions:
+        legal_actions = ['draw']
+
+    return legal_actions
+
+
+UnoRound.get_legal_actions = _patched_get_legal_actions
+
+
+# ---------------------------------------------------------------------------
+# Enriched state extraction: extends RLCard's default 4-plane observation
+# with extra planes so the DQN can learn seat-aware and context-aware play.
+#
+# Default RLCard obs [4, 4, 15]:
+#   Planes 0-2: Agent's hand encoding
+#   Plane  3:   Top card (target)
+#
+# Enriched obs [12, 4, 15]:
+#   Planes 0-2: Agent's hand encoding (unchanged)
+#   Plane  3:   Top card (unchanged)
+#   Plane  4:   Seat identity — one-hot row for this agent's seat
+#   Plane  5:   Card counts — each player's hand size (normalized)
+#   Plane  6:   Next player one-hot + direction indicator
+#   Plane  7:   Discard pile — card counting (which cards have been played)
+#   Plane  8:   Last card played per player — reveals color preferences
+#   Plane  9:   Draw vulnerability — per-player draw counts by target color
+#   Plane 10:   Deck size — how many cards remain in draw pile
+#   Plane 11:   Target seat — which seat this agent should help win (all zeros if none)
+# ---------------------------------------------------------------------------
+
+def _enriched_extract_state(env, state):
+    """Build enriched observation with seat, card count, and direction info."""
+    obs = np.zeros(STATE_SHAPE, dtype=int)
+
+    # Planes 0-2: hand, Plane 3: target (same as RLCard default)
+    encode_hand(obs[:3], state['hand'])
+    encode_target(obs[3], state['target'])
+
+    player_id = state['current_player']
+    game_round = env.game.round
+
+    # Plane 4: Seat identity — row `player_id` is filled with 1s
+    obs[4, player_id % 4, :] = 1
+
+    # Plane 5: Card counts — row per player, fill columns with normalized count
+    # Max hand size ~30 cards; normalize by dividing by 15 and clamping to 1
+    num_cards = state.get('num_cards', [7] * NUM_PLAYERS)
+    for i, count in enumerate(num_cards):
+        normalized = min(count / 15.0, 1.0)
+        obs[5, i % 4, :] = int(round(normalized * 14))  # encode as 0-14 across cols
+
+    # Plane 6: Next player + direction
+    # Row 0-3: one-hot for next player seat
+    direction = game_round.direction  # +1 clockwise, -1 counter-clockwise
+    next_player = (player_id + direction) % NUM_PLAYERS
+    obs[6, next_player % 4, :] = 1
+    # Encode direction: if counter-clockwise, set row for human seat (0) as marker
+    if direction == -1:
+        obs[6, :, 14] = 1  # last column = direction flag
+
+    # Plane 7: Discard pile — count of each card played, normalized by total copies
+    # Rows = colors (r=0, g=1, b=2, y=3), Cols = values (0-9, skip, reverse, +2, wild, +4)
+    # Value = (cards_played / total_copies) so 1.0 means all copies are gone.
+    # UNO deck: 0 = 1/color, 1-9 = 2/color, skip/rev/+2 = 2/color, wild/+4 = 4 total
+    # Lets agent reason: "all red skips played = nobody can skip with red"
+    COLOR_MAP = {'r': 0, 'g': 1, 'b': 2, 'y': 3}
+    TRAIT_MAP = {
+        '0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6,
+        '7': 7, '8': 8, '9': 9, 'skip': 10, 'reverse': 11,
+        'draw_2': 12, 'wild': 13, 'wild_draw_4': 14,
+    }
+    # Max copies per card type per color (wilds have 4 total, spread across 4 color rows)
+    MAX_COPIES = {
+        0: 1,   # 0 cards: 1 per color
+        1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2,  # 1-9: 2 per color
+        10: 2, 11: 2, 12: 2,  # skip, reverse, +2: 2 per color
+        13: 1, 14: 1,  # wild, +4: 4 total = 1 per color row
+    }
+    discard_counts = {}
+    played_cards = state.get('played_cards', [])
+    for card_str in played_cards:
+        parts = card_str.split('-')
+        if len(parts) == 2:
+            color, trait = parts
+            c = COLOR_MAP.get(color)
+            t = TRAIT_MAP.get(trait)
+            if c is not None and t is not None:
+                key = (c, t)
+                discard_counts[key] = discard_counts.get(key, 0) + 1
+    for (c, t), count in discard_counts.items():
+        max_c = MAX_COPIES.get(t, 2)
+        obs[7, c, t] = min(count, max_c)  # raw count capped at max copies
+
+    # Plane 8: Last card played by each player
+    # Row = player seat, Col = card trait (0-14), Value = color index + 1 (1=r,2=g,3=b,4=y)
+    # Key insight: wild color choices reveal hand composition
+    # e.g. human chose blue on a wild → likely holds blue cards
+    last_action_per_player = {}
+    for rec in env.action_recorder:
+        pid, action_str = rec[0], rec[1]
+        if isinstance(action_str, str) and action_str != 'draw':
+            last_action_per_player[pid] = action_str
+    for pid, card_str in last_action_per_player.items():
+        parts = card_str.split('-')
+        if len(parts) == 2:
+            color, trait = parts
+            c = COLOR_MAP.get(color)
+            t = TRAIT_MAP.get(trait)
+            if c is not None and t is not None:
+                obs[8, pid % 4, t] = c + 1  # 1=r, 2=g, 3=b, 4=y
+
+    # Plane 9: Draw vulnerability — per-player draw counts by target color
+    # Row = player seat, Cols 0-3 = draws when target was r/g/b/y
+    # Even 1 draw on blue means: "this player has no blue, no matching number, no wilds"
+    # Resets when the player plays a card (their hand changed)
+    # Reconstructed by walking the action history
+    COLOR_IDX = {'r': 0, 'g': 1, 'b': 2, 'y': 3}
+    draw_per_color = {i: [0, 0, 0, 0] for i in range(NUM_PLAYERS)}
+    # Track the current target color through the action history
+    # Start with the initial target from the game's first played card
+    tracking_color = None
+    initial_played = state.get('played_cards', [])
+    if initial_played:
+        first_parts = initial_played[0].split('-')
+        if len(first_parts) == 2:
+            tracking_color = first_parts[0]
+    for rec in env.action_recorder:
+        pid, action_str = rec[0], rec[1]
+        if action_str == 'draw':
+            if tracking_color and tracking_color in COLOR_IDX:
+                draw_per_color[pid][COLOR_IDX[tracking_color]] += 1
+        else:
+            # Player played a card — reset their draws, update tracking color
+            draw_per_color[pid] = [0, 0, 0, 0]
+            parts = action_str.split('-')
+            if len(parts) == 2:
+                tracking_color = parts[0]
+    for pid in range(NUM_PLAYERS):
+        for ci in range(4):
+            obs[9, pid % 4, ci] = min(draw_per_color[pid][ci], 14)
+
+    # Plane 10: Deck size — remaining cards in draw pile
+    # UNO deck = 108 cards. Normalize: value = remaining / 8 (capped at 14)
+    # Full deck ~79 after dealing → ~10. Empty → 0. Tells agent early/mid/late game.
+    deck_remaining = len(game_round.dealer.deck)
+    deck_val = min(int(deck_remaining / 8), 14)
+    obs[10, :, :] = deck_val
+
+    # Plane 11: Target seat — which seat this agent should help win
+    # One-hot row encoding (same pattern as plane 4 seat identity)
+    # All zeros when no target is set (adversarial/selfish modes)
+    target_seat = getattr(env, '_target_seat', None)
+    if target_seat is not None:
+        obs[11, target_seat % 4, :] = 1
+
+    # Build full state dict (raw_obs unchanged — API uses this)
+    legal_action_id = env._get_legal_actions()
+
+    # Hyper altruistic: allow draw even with playable cards
+    if getattr(env, '_allow_voluntary_draw', False):
+        draw_id = env._ACTION_SPACE.get('draw')
+        if draw_id is not None and draw_id not in legal_action_id:
+            legal_action_id[draw_id] = None
+
+    extracted_state = {'obs': obs, 'legal_actions': legal_action_id}
+    extracted_state['raw_obs'] = state
+    extracted_state['raw_legal_actions'] = [a for a in state['legal_actions']]
+    extracted_state['action_record'] = env.action_recorder
+    return extracted_state
+
+
 class UnoGame:
     """Wrapper around RLCard's UNO environment.
 
@@ -90,9 +309,33 @@ class UnoGame:
         if NUM_PLAYERS != 2:
             self.env.game = RLCardUnoGame(num_players=NUM_PLAYERS)
             self.env.num_players = NUM_PLAYERS
-            self.env.state_shape = [[4, 4, 15] for _ in range(NUM_PLAYERS)]
-            self.env.action_shape = [None for _ in range(NUM_PLAYERS)]
+
+        # Override state extraction with enriched version and update shape
+        self.env.state_shape = [STATE_SHAPE for _ in range(NUM_PLAYERS)]
+        self.env.action_shape = [None for _ in range(NUM_PLAYERS)]
+        self.env._extract_state = lambda state: _enriched_extract_state(
+            self.env, state
+        )
+        self.env._target_seat = None
+        self.env._allow_voluntary_draw = False
         self._agents = None
+
+    def set_target_seat(self, seat=None):
+        """Set which seat the support agents should help win.
+
+        Args:
+            seat: Seat index (0-3) to help, or None for no target
+                (adversarial/selfish mode — plane 11 stays all zeros).
+        """
+        self.env._target_seat = seat
+
+    def set_allow_voluntary_draw(self, allow: bool = True):
+        """Allow agents to draw even with playable cards (hyper altruistic).
+
+        When enabled, 'draw' is added to legal actions for every decision,
+        so agents can choose to pass their turn by drawing a card.
+        """
+        self.env._allow_voluntary_draw = allow
 
     def set_agents(self, agents: list) -> None:
         """Assign agents to seats.

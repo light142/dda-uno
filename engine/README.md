@@ -1,4 +1,4 @@
-# ADA UNO (Adaptive Difficulty Adjustment) — AI Bot System with Win Rate Control
+# ADA UNO Engine — Pure Core Package
 
 Multi-agent AI system for UNO where 3 AI bots play against 1 human player.
 The bots dynamically adjust their play strength so the player's win rate
@@ -6,71 +6,59 @@ converges to a configurable target (e.g., 50%).
 
 ## Architecture
 
-```
-config/        ← SETTINGS: centralized configurables for all layers
-game_logic/    ← CORE layer: shared by everything
-simulation/    ← TEST layer: uses game_logic + config (fixed bots, analysis)
-training/      ← TRAIN layer: uses game_logic + config (produces model weights)
-models/        ← BRIDGE: training writes .pt files, simulation + api read
-data/          ← STORAGE: SQLite DB, simulation logs
-```
+The engine is a **pure core package** — it contains only game logic, agents,
+bots, and configuration. It has **no** training or simulation code.
 
-The FastAPI layer lives in `../api/` and imports from this package.
-
-### Layered Design
+```
+ada-uno/
+├── engine/        ← This package: pure core (game logic, agents, bots)
+├── api/           ← FastAPI service (wraps engine for live play)
+├── simulator/     ← Offline training & simulation (wraps engine)
+└── app/           ← Phaser.js frontend (connects to api)
+```
 
 ```
 ┌──────────────┐  ┌──────────────┐
-│  simulation/ │  │  training/   │
-│  (test)      │  │  (train)     │
+│  simulator/  │  │     api/     │
+│  (train/sim) │  │   (serve)    │
 └──────┬───────┘  └──────┬───────┘
        │                 │
        ▼                 ▼
 ┌─────────────────────────────────────────────────┐
-│              game_logic/ (core)                  │
-│  agents/  game.py  controller.py  store.py      │
+│              engine/ (this package)              │
+│  game_logic/  config/  models/  data/           │
 └─────────────────────────────────────────────────┘
 ```
 
-Rule: if both simulation and API need it → `game_logic/`. Otherwise → own layer.
-
-### Project Structure
+### Package Structure
 
 ```
 engine/
+├── __init__.py               # Re-exports: UnoGame, AdaptiveAgent, WinRateController, etc.
+├── controller.py             # Re-exports WinRateController for convenience
 ├── requirements.txt
 ├── README.md
 ├── config/
-│   ├── __init__.py            # Re-exports all settings
-│   ├── game.py                # NUM_PLAYERS, SEED, STATE_SHAPE, etc.
-│   ├── training.py            # SEAT0_OPPONENT, NUM_EPISODES, LR, etc.
-│   ├── simulation.py          # NUM_GAMES, SEAT0_BOT, model paths
-│   └── controller.py          # TARGET_WIN_RATE, ADJUSTMENT_STEP, etc.
+│   ├── __init__.py           # Re-exports all settings
+│   ├── game.py               # NUM_PLAYERS, SEED, STATE_SHAPE, NUM_ACTIONS, etc.
+│   └── controller.py         # TARGET_WIN_RATE, ADJUSTMENT_STEP, INITIAL_STRENGTH
 ├── game_logic/
-│   ├── __init__.py
-│   ├── game.py                # UnoGame: RLCard env wrapper
-│   ├── controller.py          # WinRateController: proportional control
-│   ├── store.py               # PlayerStore: SQLite (swap to Postgres later)
-│   └── agents/
-│       ├── __init__.py
-│       ├── base.py            # BaseAgent ABC (shared interface)
-│       ├── rl_agent.py        # RLAgent: DQN wrapper, train/save/load
-│       └── adaptive.py        # AdaptiveAgent: blends strong + weak
-├── training/
-│   ├── __init__.py
-│   ├── train_strong.py        # Train agent to WIN (reward: +1 on win)
-│   └── train_weak.py          # Train agent to HELP seat 0 (custom reward)
-├── simulation/
-│   ├── __init__.py
-│   ├── bots/
-│   │   ├── __init__.py        # get_bot("noob"|"casual"|"pro") factory
-│   │   ├── noob.py            # NoobBot: random + color preference
-│   │   ├── casual.py          # CasualBot: high-value first, save wilds
-│   │   └── pro.py             # ProBot: tracks state, plays optimally
-│   ├── simulate.py            # Run N games, test controller convergence
-│   └── analyze.py             # Print stats, optional plots
-├── models/                    # Trained .pt weight files
-└── data/                      # SQLite DB, simulation result JSONs
+│   ├── __init__.py           # Re-exports core classes
+│   ├── game.py               # UnoGame: RLCard env wrapper (4-player UNO)
+│   ├── controller.py         # WinRateController: proportional control
+│   ├── store.py              # PlayerStore: SQLite player history backend
+│   ├── agents/
+│   │   ├── __init__.py       # Re-exports BaseAgent, RLAgent, AdaptiveAgent
+│   │   ├── base.py           # BaseAgent ABC (shared interface)
+│   │   ├── rl_agent.py       # RLAgent: DQN wrapper, train/save/load
+│   │   └── adaptive.py       # AdaptiveAgent: blends strong + weak agents
+│   └── bots/
+│       ├── __init__.py       # get_bot("noob"|"casual"|"pro") factory
+│       ├── noob.py           # NoobBot: random + color preference
+│       ├── casual.py         # CasualBot: high-value first, save wilds
+│       └── pro.py            # ProBot: tracks state, plays optimally
+├── models/                   # Trained .pt weight files (gitignored)
+└── data/                     # Runtime data: simulation results, SQLite DB (gitignored)
 ```
 
 ## Setup
@@ -83,45 +71,15 @@ source venv/bin/activate        # Linux/Mac
 pip install -r requirements.txt
 ```
 
-## How to Use
+## Usage
 
-### Step 1: Verify Game Engine (Baseline)
+The engine is imported by `api/` and `simulator/`:
 
-Run random agents to verify ~25% win rate per seat:
-
-```bash
-python -m simulation.simulate --baseline --games 100
-```
-
-### Step 2: Train Agents
-
-Train the strong agent (learns to win):
-```bash
-python -m training.train_strong
-```
-
-Train the weak agent (learns to help seat 0 win):
-```bash
-python -m training.train_weak
-```
-
-Models saved to `models/strong/strong_agent.pt` and `models/weak/weak_agent.pt`.
-
-### Step 3: Run Adaptive Simulation
-
-Test the win rate controller with a fixed bot at seat 0:
-
-```bash
-python -m simulation.simulate --bot noob --games 1000
-python -m simulation.simulate --bot casual --games 1000
-python -m simulation.simulate --bot pro --games 1000
-```
-
-### Step 4: Analyze Results
-
-```bash
-python -m simulation.analyze
-python -m simulation.analyze --plot    # requires matplotlib
+```python
+from engine import UnoGame, AdaptiveAgent, WinRateController, PlayerStore
+from engine.config.game import NUM_PLAYERS, STATE_SHAPE
+from engine.config.controller import TARGET_WIN_RATE
+from engine.game_logic.bots import get_bot
 ```
 
 ## How It Works
@@ -150,26 +108,15 @@ else:
     action = weak_agent.eval_step(state)     # play to help seat 0
 ```
 
-### Game Flow (Simulation)
+### Fixed Bots
 
-```
-1. Create UnoGame with RLCard env (4 players)
-2. Seat 0 = fixed bot (NoobBot/CasualBot/ProBot)
-3. Seats 1-3 = AdaptiveAgent (strong + weak blend)
-4. Play game → determine winner
-5. Controller adjusts bot strength based on win rate
-6. Repeat for N games
-7. Check if win rate converged to target
-```
+Used as seat-0 stand-ins during simulation, or as fallbacks:
 
-### Training
-
-- **Strong agent**: Standard DQN training. Reward = +1 when agent wins.
-  Seat 0 uses RLCard's rule-based agent (configurable in config/training.py).
-- **Weak agent**: Custom reward. +1 when seat 0 wins, -1 when agent
-  itself wins, -0.5 otherwise.
-
-Training opponent at seat 0 is configurable: `"random"`, `"rule-v1"`, `"self-play"`.
+| Bot | Strategy |
+|-----|----------|
+| NoobBot | Random card selection with color preference |
+| CasualBot | Plays high-value cards first, saves wilds |
+| ProBot | Tracks game state, plays optimally |
 
 ## Config Reference
 
@@ -177,16 +124,14 @@ Training opponent at seat 0 is configurable: `"random"`, `"rule-v1"`, `"self-pla
 |---------|------|---------|-------------|
 | `NUM_PLAYERS` | config/game.py | 4 | Players per game |
 | `SEED` | config/game.py | None | Random seed |
-| `SEAT0_OPPONENT` | config/training.py | "rule-v1" | Training opponent type |
-| `NUM_EPISODES` | config/training.py | 100,000 | Training episodes |
-| `LEARNING_RATE` | config/training.py | 0.00005 | DQN learning rate |
-| `NUM_GAMES` | config/simulation.py | 1,000 | Simulation games |
-| `SEAT0_BOT` | config/simulation.py | "casual" | Simulation bot type |
+| `STATE_SHAPE` | config/game.py | [4,4,15] | RLCard state tensor shape |
+| `NUM_ACTIONS` | config/game.py | 61 | RLCard action space size |
 | `TARGET_WIN_RATE` | config/controller.py | 0.50 | Target win rate |
 | `ADJUSTMENT_STEP` | config/controller.py | 0.05 | Controller gain |
 | `INITIAL_STRENGTH` | config/controller.py | 0.5 | Starting bot strength |
 
-## API Layer
+## Related Packages
 
-The FastAPI API layer lives in `../api/` and imports from this package.
-See [api/README.md](../api/README.md) for details.
+- **[api/](../api/README.md)** — FastAPI service wrapping engine for live HTTP play
+- **[simulator/](../simulator/)** — Offline training and simulation (produces model weights)
+- **[app/](../app/)** — Phaser.js frontend connecting to the API

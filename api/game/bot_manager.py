@@ -14,7 +14,7 @@ from .cards import Card, get_playable_cards, is_wild, pick_best_color
 from .rlcard_bridge import encode_game_state, action_id_to_card
 
 # These imports come from the shared engine/ package
-from engine.agents import AdaptiveAgent
+from engine import AdaptiveAgent
 from engine.controller import WinRateController
 
 
@@ -45,16 +45,24 @@ class BotManager:
         return agents
 
     def get_bot_decision(self, agent: AdaptiveAgent, hand: list[Card],
-                         top_card: Card, active_color: str
-                         ) -> tuple[Optional[Card], Optional[str]]:
+                         top_card: Card, active_color: str,
+                         **context) -> tuple[Optional[Card], Optional[str]]:
         """Query an adaptive agent for a bot decision.
 
         Uses the RLCard bridge to translate game state -> agent -> card.
 
+        Args:
+            agent: The AdaptiveAgent to query.
+            hand: Bot's hand cards.
+            top_card: Current top card.
+            active_color: Current active color.
+            **context: Extra game context forwarded to encode_game_state
+                (bot_seat, hand_sizes, direction, played_cards, deck_remaining).
+
         Returns (card_to_play, chosen_color) or (None, None) for draw.
         """
-        # Build RLCard-compatible state
-        state = encode_game_state(hand, top_card, active_color)
+        # Build RLCard-compatible enriched state
+        state = encode_game_state(hand, top_card, active_color, **context)
 
         # Query agent
         action_id, _ = agent.eval_step(state)
