@@ -242,7 +242,7 @@ def train(fresh=False):
             bot_wins = sum(wins[s] for s in BOT_SEATS)
             print(f"  \u2502  Bots (hyper alt)    : {bot_wins:>3}/{EVAL_NUM_GAMES}  ({bot_wins/EVAL_NUM_GAMES:.1%})")
             print(f"  \u2502  Avg voluntary draws : {avg_draws:.1f} per bot per game")
-            print(f"  \u2514{'\u2500' * 50}")
+            print(f"  \u2514{'─' * 50}")
 
         # Periodic save
         if episode % SAVE_EVERY == 0:
