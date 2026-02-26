@@ -124,7 +124,7 @@ Used as seat-0 stand-ins during simulation, or as fallbacks:
 |---------|------|---------|-------------|
 | `NUM_PLAYERS` | config/game.py | 4 | Players per game |
 | `SEED` | config/game.py | None | Random seed |
-| `STATE_SHAPE` | config/game.py | [4,4,15] | RLCard state tensor shape |
+| `STATE_SHAPE` | config/game.py | [12,4,15] | Enriched observation: 12 planes (hand, target, seat, counts, direction, discard, etc.) |
 | `NUM_ACTIONS` | config/game.py | 61 | RLCard action space size |
 | `TARGET_WIN_RATE` | config/controller.py | 0.50 | Target win rate |
 | `ADJUSTMENT_STEP` | config/controller.py | 0.05 | Controller gain |

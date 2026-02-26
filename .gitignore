@@ -58,14 +58,22 @@ htmlcov/
 engine/models/**/*.pt
 engine/models/**/*.pth
 
+# Simulator: keep final agent files, ignore training checkpoints
+simulator/models/**/checkpoint_*.pt
+simulator/models/**/*.pth
+
 # Simulation output data (regenerated on each run)
 engine/data/*.json
 engine/data/*.csv
 engine/data/*.db
+simulator/data/*.json
+simulator/data/*.csv
 
 # Keep directory structure with .gitkeep
 !engine/models/.gitkeep
 !engine/data/.gitkeep
+!simulator/models/.gitkeep
+!simulator/data/.gitkeep
 
 # SQLite
 *.db

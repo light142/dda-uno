@@ -34,7 +34,7 @@ class RLAgent(BaseAgent):
         super().__init__()
 
         if model_path and os.path.exists(model_path):
-            checkpoint = torch.load(model_path, map_location=device)
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
             self._agent = DQNAgent.from_checkpoint(checkpoint)
         else:
             self._agent = DQNAgent(

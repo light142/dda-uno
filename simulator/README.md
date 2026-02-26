@@ -32,11 +32,11 @@ simulator/
 ├── requirements.txt
 ├── README.md
 ├── config/
-│   ├── simulation.py        # NUM_GAMES, SEAT0_BOT, model/data paths
-│   └── training.py          # NUM_EPISODES, LR, BATCH_SIZE, DQN hyperparams
+│   ├── simulation.py        # TIER_GAMES, data paths
+│   ├── training.py          # NUM_EPISODES, LR, BATCH_SIZE, DQN hyperparams
+│   └── tiers.py             # Tier registry, model resolution, voluntary draw policy
 ├── simulation/
-│   ├── simulate.py          # Run baseline or adaptive games
-│   └── analyze.py           # Print stats, optional matplotlib plots
+│   └── simulate.py    # Run any tier combination
 ├── training/
 │   ├── train_adversarial.py   # Adversarial: team reward, beat seat 0
 │   ├── train_selfish.py       # Selfish: individual reward, each for itself
@@ -102,27 +102,55 @@ python -m simulator.training.train_hyper_altruistic --fresh &
 
 Models are saved to `simulator/models/`.
 
-### Step 2: Run Baseline (Verify Engine)
+### Step 2: Simulate Tier Combinations
+
+Test any combination of agents across all 4 seats:
+
+```bash
+# Specific combo: 3 selfish bots vs rule-v1
+python -m simulator.simulation.simulate --s0 rule-v1 --s1 selfish --s2 selfish --s3 selfish --games 500
+
+# Altruistic bots helping seat 0 win (target auto-set to seat 0)
+python -m simulator.simulation.simulate --s0 casual --s1 altruistic --s2 altruistic --s3 altruistic
+
+# Mix tiers: 2 selfish + 1 altruistic (no --target needed)
+python -m simulator.simulation.simulate --s0 rule-v1 --s1 selfish --s2 altruistic --s3 selfish
+
+# Mix altruistic + cooperative in the same game
+python -m simulator.simulation.simulate --s0 casual --s1 altruistic --s2 cooperative --s3 selfish --target 1
+
+# Cooperative bots helping seat 2
+python -m simulator.simulation.simulate --s0 random --s1 cooperative --s2 selfish --s3 cooperative --target 2
+
+# Run ALL 125 tier combinations (builds lookup table)
+python -m simulator.simulation.simulate --s0 rule-v1 --all --games 200
+```
+
+**Agent choices** for any seat: `random`, `rule-v1`, `noob`, `casual`, `pro`, `selfish`, `adversarial`, `altruistic`, `cooperative`, `hyper_altruistic`
+
+**Target seat (plane 11)** is resolved per-seat automatically:
+- `altruistic` / `hyper_altruistic` — always target seat 0 (hardcoded, matches training)
+- `cooperative` — requires `--target N` from CLI (which bot teammate to help)
+- All others — no target (plane 11 all zeros)
+
+**Voluntary draw** is automatically set per-seat to match each agent's training policy:
+
+| Agent | Voluntary draws | Trained with |
+|-------|----------------|--------------|
+| selfish | 5 per game | cap 5 |
+| adversarial | 5 per game | cap 5 |
+| hyper_altruistic | 5 per game | cap 5 |
+| altruistic | disabled | draw off |
+| cooperative | disabled | draw off |
+| random/rule-v1/bots | disabled | N/A |
+
+Results are saved to `simulator/data/tier_results.json`.
+
+### Step 3: Run Baseline (Verify Engine)
 
 Run random agents to verify ~25% win rate per seat:
 ```bash
-python -m simulator.simulation.simulate --baseline --games 100
-```
-
-### Step 3: Run Adaptive Simulation
-
-Test the win rate controller with a fixed bot at seat 0:
-```bash
-python -m simulator.simulation.simulate --bot noob --games 1000
-python -m simulator.simulation.simulate --bot casual --games 1000
-python -m simulator.simulation.simulate --bot pro --games 1000
-```
-
-### Step 4: Analyze Results
-
-```bash
-python -m simulator.simulation.analyze
-python -m simulator.simulation.analyze --plot    # requires matplotlib
+python -m simulator.simulation.simulate --s0 random --s1 random --s2 random --s3 random --games 100
 ```
 
 ## Training Details
@@ -138,37 +166,24 @@ Baseline tier — plays like a real competitive UNO player.
 ### Altruistic Agent
 Helps seat 0 (human player) win. Target seat plane (plane 11) = seat 0.
 Mixed seat 0 opponents (50% random + 50% rule-v1) for robust helping strategies.
-Custom reward: +1 seat 0 wins, -1 self wins, -0.5 other bot wins.
+Custom reward: +1 seat 0 wins, -1 self wins, -1 other bot wins.
 
 ### Cooperative Agent
 Helps a designated bot teammate win. Target seat plane (plane 11) rotates among seats 1-3.
 Used in hyper adversarial tier where support bots help the lucky bot.
-Custom reward: +1 target wins, -1 self wins, -0.5 other wins.
+Custom reward: +1 target wins, -1 self wins, -1 other wins.
 
 ### Hyper Altruistic Agent
 Like altruistic but can draw (pass) even with playable cards. Learns WHEN passing helps seat 0.
 Voluntary draw enabled: 'draw' is always a legal action.
-Custom reward: +3 seat 0 wins, -1 self wins, -0.5 other wins, -1 per voluntary draw (cumulative).
+Custom reward: +2 seat 0 wins, -1 self wins, -1 other wins, -0.5 per voluntary draw (cumulative).
 Most impactful at seats 1 and 3 (adjacent to seat 0). Mixable with other tiers.
-
-### Simulation Flow
-
-```
-1. Create UnoGame with RLCard env (4 players)
-2. Seat 0 = fixed bot (NoobBot / CasualBot / ProBot)
-3. Seats 1-3 = AdaptiveAgent (strong + weak blend)
-4. Play game → determine winner
-5. WinRateController adjusts bot strength based on win rate
-6. Repeat for N games
-7. Check if win rate converged to target
-```
 
 ## Config Reference
 
 | Setting | File | Default | Description |
 |---------|------|---------|-------------|
-| `NUM_GAMES` | config/simulation.py | 1,000 | Simulation games |
-| `SEAT0_BOT` | config/simulation.py | "casual" | Bot type at seat 0 |
+| `TIER_GAMES` | config/simulation.py | 500 | Games per tier combination |
 | `SEAT0_OPPONENT` | config/training.py | "rule-v1" | Training opponent type |
 | `NUM_EPISODES` | config/training.py | 100,000 | Training episodes |
 | `LEARNING_RATE` | config/training.py | 0.00005 | DQN learning rate |
@@ -176,16 +191,3 @@ Most impactful at seats 1 and 3 (adjacent to seat 0). Mixable with other tiers.
 | `REPLAY_MEMORY_SIZE` | config/training.py | 20,000 | Experience replay buffer |
 | `EVAL_EVERY` | config/training.py | 1,000 | Evaluate every N episodes |
 | `SAVE_EVERY` | config/training.py | 10,000 | Checkpoint every N episodes |
-
-## Engine Imports
-
-The simulator imports from the shared engine package (no duplication):
-
-```python
-from engine.game_logic.game import UnoGame
-from engine.game_logic.agents import RLAgent, AdaptiveAgent
-from engine.game_logic.controller import WinRateController
-from engine.game_logic.bots import get_bot
-from engine.config.game import NUM_PLAYERS, STATE_SHAPE
-from engine.config.controller import TARGET_WIN_RATE
-```

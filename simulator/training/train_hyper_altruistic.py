@@ -176,9 +176,10 @@ def train(fresh=False):
 
     # Create game and agents
     game = UnoGame()
+    game.set_max_voluntary_draws(5)
 
     # Voluntary draw is already enabled by default (True in UnoGame)
-    # Hyper altruistic learns WHEN to pass via the -1 per pass penalty
+    # Hyper altruistic learns WHEN to pass via the -0.5 per pass penalty
 
     # Create the RL agent — load checkpoint if resuming
     if checkpoint_path:

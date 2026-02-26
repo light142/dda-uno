@@ -30,6 +30,13 @@ def _patched_perform_draw_action(self, players):
     if not self.dealer.deck:
         self.replace_deck()
 
+    if not self.dealer.deck:
+        # No cards anywhere — end the game (fewest cards wins)
+        self.is_over = True
+        self.winner = [min(range(self.num_players),
+                          key=lambda i: len(players[i].hand))]
+        return
+
     card = self.dealer.deck.pop()
 
     if card.type == 'wild':
@@ -64,6 +71,42 @@ def _patched_perform_draw_action(self, players):
 
 
 UnoRound._perform_draw_action = _patched_perform_draw_action
+
+
+# ---------------------------------------------------------------------------
+# RLCard bug fix: deck can run empty during +2/+4 penalty dealing.
+#
+# When _preform_non_number_action deals penalty cards (2 for draw_2,
+# 4 for wild_draw_4), it calls dealer.deal_cards() which pops from the
+# deck without checking if enough cards remain. In long games the deck
+# empties and pop() raises IndexError.
+#
+# Fix: temporarily replace dealer.deal_cards with a safe version that
+# reshuffles the discard pile back into the deck before each pop.
+# ---------------------------------------------------------------------------
+
+_original_non_number_action = UnoRound._preform_non_number_action
+
+
+def _patched_non_number_action(self, players, card):
+    round_ref = self
+
+    def _safe_deal_cards(player, num):
+        for _ in range(num):
+            if not round_ref.dealer.deck:
+                round_ref.replace_deck()
+            if not round_ref.dealer.deck:
+                break  # No cards left anywhere
+            player.hand.append(round_ref.dealer.deck.pop())
+
+    # Temporarily shadow the class method with our safe version
+    self.dealer.deal_cards = _safe_deal_cards
+    try:
+        _original_non_number_action(self, players, card)
+    finally:
+        del self.dealer.deal_cards  # Remove instance override, restore class method
+
+UnoRound._preform_non_number_action = _patched_non_number_action
 
 
 # ---------------------------------------------------------------------------
@@ -263,9 +306,12 @@ def _enriched_extract_state(env, state):
     # Plane 11: Target seat — which seat this agent should help win
     # One-hot row encoding (same pattern as plane 4 seat identity)
     # All zeros when no target is set (adversarial/selfish modes)
-    target_seat = getattr(env, '_target_seat', None)
-    if target_seat is not None:
-        obs[11, target_seat % 4, :] = 1
+    # Supports per-player dict: {player_id: target_seat} or global int
+    _ts = getattr(env, '_target_seat', None)
+    if _ts is not None:
+        target_seat = _ts[player_id] if isinstance(_ts, dict) else _ts
+        if target_seat is not None:
+            obs[11, target_seat % 4, :] = 1
 
     # Build full state dict (raw_obs unchanged — API uses this)
     # Note: voluntary draw is handled at env._get_legal_actions level
@@ -273,7 +319,10 @@ def _enriched_extract_state(env, state):
 
     extracted_state = {'obs': obs, 'legal_actions': legal_action_id}
     extracted_state['raw_obs'] = state
-    extracted_state['raw_legal_actions'] = [a for a in state['legal_actions']]
+    raw_legal = [a for a in state['legal_actions']]
+    if 60 in legal_action_id and 'draw' not in raw_legal:
+        raw_legal.append('draw')
+    extracted_state['raw_legal_actions'] = raw_legal
     extracted_state['action_record'] = env.action_recorder
     return extracted_state
 
@@ -313,27 +362,72 @@ class UnoGame:
         )
         self.env._target_seat = None
         self.env._allow_voluntary_draw = True
+        self.env._max_voluntary_draws = None  # None = unlimited (deployment)
+        self.env._voluntary_draw_counts = {}  # per-player count, reset each game
+        self.env._voluntary_draw_offered_to = None  # player_id if we just offered
 
         # Patch _get_legal_actions to support voluntary draw at the env level.
         # This ensures both state extraction AND action decoding see draw as legal.
+        # Respects per-player cap when _max_voluntary_draws is set.
         _original_get_legal = self.env._get_legal_actions
         _env_ref = self.env
 
         def _get_legal_with_voluntary_draw():
             legal = _original_get_legal()
+            _env_ref._voluntary_draw_offered_to = None
             if getattr(_env_ref, '_allow_voluntary_draw', False) and 60 not in legal:
+                # Check per-player cap (supports int or dict)
+                max_vd = _env_ref._max_voluntary_draws
+                if max_vd is not None:
+                    pid = _env_ref.game.round.current_player
+                    # Dict = per-player caps, int = global cap
+                    cap = max_vd[pid] if isinstance(max_vd, dict) else max_vd
+                    if _env_ref._voluntary_draw_counts.get(pid, 0) >= cap:
+                        return legal  # Capped — don't offer voluntary draw
                 legal[60] = None
+                _env_ref._voluntary_draw_offered_to = _env_ref.game.round.current_player
             return legal
 
         self.env._get_legal_actions = _get_legal_with_voluntary_draw
+
+        # Wrap env.step to track when a voluntary draw is actually taken.
+        _original_env_step = self.env.step
+
+        def _step_with_draw_tracking(action, raw_action=False):
+            is_draw = (action == 'draw') if raw_action else (action == 60)
+            offered_to = _env_ref._voluntary_draw_offered_to
+            _env_ref._voluntary_draw_offered_to = None
+            # Step first — _decode_action internally calls _get_legal_actions,
+            # so the count must not be incremented yet or action 60 disappears.
+            result = _original_env_step(action, raw_action)
+            if is_draw and offered_to is not None:
+                _env_ref._voluntary_draw_counts[offered_to] = \
+                    _env_ref._voluntary_draw_counts.get(offered_to, 0) + 1
+            return result
+
+        self.env.step = _step_with_draw_tracking
+
+        # Wrap env.reset to clear voluntary draw counts each game.
+        _original_env_reset = self.env.reset
+
+        def _reset_with_draw_tracking():
+            _env_ref._voluntary_draw_counts = {}
+            _env_ref._voluntary_draw_offered_to = None
+            return _original_env_reset()
+
+        self.env.reset = _reset_with_draw_tracking
         self._agents = None
 
     def set_target_seat(self, seat=None):
         """Set which seat the support agents should help win.
 
         Args:
-            seat: Seat index (0-3) to help, or None for no target
-                (adversarial/selfish mode — plane 11 stays all zeros).
+            seat: One of:
+                - int (0-3): Global target — all agents see the same plane 11.
+                - dict {player_id: target_seat}: Per-player targets — each
+                  agent sees its own plane 11. Use None as value for agents
+                  that don't need a target (e.g. selfish).
+                - None: No target (adversarial/selfish — plane 11 all zeros).
         """
         self.env._target_seat = seat
 
@@ -345,6 +439,17 @@ class UnoGame:
         cards rather than passing.
         """
         self.env._allow_voluntary_draw = allow
+
+    def set_max_voluntary_draws(self, max_draws=None):
+        """Limit voluntary draws per player per game.
+
+        Args:
+            max_draws: Cap on voluntary draws per player per game.
+                int = same cap for all players.
+                dict = per-player caps {seat_id: max_draws}.
+                None = unlimited (default, for deployment/API).
+        """
+        self.env._max_voluntary_draws = max_draws
 
     def set_agents(self, agents: list) -> None:
         """Assign agents to seats.

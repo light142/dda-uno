@@ -147,6 +147,7 @@ def train(fresh: bool = False):
 
     # Create game and agents
     game = UnoGame()
+    game.set_max_voluntary_draws(5)
 
     # Create the RL agent — load checkpoint if resuming
     if checkpoint_path:
