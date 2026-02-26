@@ -3,82 +3,96 @@
 Custom reward: +1 when seat 0 wins, -1 when the agent itself wins,
 -1 when another bot wins.
 
-Target seat plane (plane 11) is always set to seat 0.
+Opponent pool with equal weights (must help any skill level).
+Includes random-vd opponent to learn with VD-using players.
+After 20% of training, includes selfish checkpoints as opponents.
 
-Seat 0 opponent is mixed each episode (50% random, 50% rule-v1) so the
-model learns general helping strategies that work regardless of how
-the human player plays — from noob to pro.
+VD disabled for altruistic bots — they help by playing smart cards, not by passing.
+Seat 0 VD cap follows opponent type.
 
-Supports resume: automatically finds the latest checkpoint and continues.
+Supports resume, --fresh, and --test flags.
 
 Usage:
     python -m simulator.training.train_altruistic
-    python -m simulator.training.train_altruistic --fresh   # ignore checkpoints, start over
+    python -m simulator.training.train_altruistic --fresh
+    python -m simulator.training.train_altruistic --test
 """
 
 import os
 import sys
 import glob
-import random
 import argparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-
-from rlcard.agents import RandomAgent
-from rlcard.models import load as load_model
 
 from engine.game_logic.game import UnoGame
 from engine.game_logic.agents import RLAgent
 from engine.config.game import NUM_PLAYERS, NUM_ACTIONS, PLAYER_SEAT, BOT_SEATS
 from simulator.config.training import (
     NUM_EPISODES, EVAL_EVERY, EVAL_NUM_GAMES,
-    MODEL_DIR, SAVE_EVERY,
+    MODEL_DIR, SAVE_EVERY, ALTRUISTIC_POOL,
+    SELFISH_CHECKPOINT_START, REPLAY_MEMORY_SIZE,
+)
+from simulator.training.opponents import (
+    create_opponent_pool, pick_opponent, try_load_selfish_checkpoint,
+)
+from simulator.training.metrics import (
+    TrainingLogger, count_voluntary_draws, get_dqn_metrics,
+    print_eval_header, print_eval_metrics,
 )
 
 ALTRUISTIC_DIR = os.path.join(MODEL_DIR, "altruistic")
 
-# Mixed seat 0 opponents for robust training
-SEAT0_AGENTS = None  # Initialized in train()
 
-
-def altruistic_reward(payoffs: list, seat: int) -> float:
-    """Custom reward for altruistic agents.
-
-    Args:
-        payoffs: Original payoffs from the game.
-        seat: The bot's seat index.
-
-    Returns:
-        Custom reward value.
-    """
+def altruistic_reward(payoffs, seat):
+    """Custom reward: +1 if seat 0 wins, -1 otherwise."""
     winner = max(range(len(payoffs)), key=lambda i: payoffs[i])
-
     if winner == PLAYER_SEAT:
-        return 1.0   # Seat 0 won — mission accomplished
+        return 1.0
     elif winner == seat:
-        return -1.0   # This bot won — bad, we were supposed to help seat 0
+        return -1.0
     else:
-        return -1.0   # Another bot won — failed to protect seat 0
+        return -1.0
 
 
-def evaluate(game: UnoGame, num_games: int) -> dict:
-    """Evaluate: check how often seat 0 wins."""
+def evaluate(game, rl_agent, num_games):
+    """Evaluate with rule-v1 at seat 0 (VD disabled)."""
+    from rlcard.models import load as load_model
+    eval_opponent = load_model('uno-rule-v1').agents[0]
+
+    agents = [None] * NUM_PLAYERS
+    agents[0] = eval_opponent
+    for seat in BOT_SEATS:
+        agents[seat] = rl_agent.agent
+    game.set_agents(agents)
+    game.set_max_voluntary_draws({0: 0, 1: 0, 2: 0, 3: 0})
+    game.set_target_seat(PLAYER_SEAT)
+
     wins = {i: 0 for i in range(NUM_PLAYERS)}
+    total_game_length = 0
+    total_vd = {i: 0 for i in range(NUM_PLAYERS)}
 
     for _ in range(num_games):
-        game.set_target_seat(PLAYER_SEAT)
         result = game.run_game(is_training=False)
         wins[result['winner']] += 1
 
-    return wins
+        game_len = sum(
+            len(result['trajectories'][s]) // 2
+            for s in range(NUM_PLAYERS)
+        )
+        total_game_length += game_len
+
+        for s in range(NUM_PLAYERS):
+            total_vd[s] += count_voluntary_draws(result['trajectories'], s)
+
+    avg_game_length = total_game_length / num_games
+    vd_per_seat = {s: total_vd[s] / num_games for s in range(NUM_PLAYERS)}
+
+    return wins, avg_game_length, vd_per_seat
 
 
-def find_latest_checkpoint(checkpoint_dir: str):
-    """Find the latest checkpoint file and its episode number.
-
-    Returns:
-        (path, episode) or (None, 0) if no checkpoints exist.
-    """
+def find_latest_checkpoint(checkpoint_dir):
+    """Find the latest checkpoint file and its episode number."""
     pattern = os.path.join(checkpoint_dir, "checkpoint_*.pt")
     files = glob.glob(pattern)
     if not files:
@@ -98,13 +112,17 @@ def find_latest_checkpoint(checkpoint_dir: str):
     return best_path, best_ep
 
 
-def train(fresh: bool = False):
+def train(fresh=False, test=False):
     """Main training loop for the altruistic agent."""
-    # Check for resume
+    num_episodes = 200 if test else NUM_EPISODES
+    eval_every = 50 if test else EVAL_EVERY
+    save_every = 100 if test else SAVE_EVERY
+    eval_num_games = 20 if test else EVAL_NUM_GAMES
+
     start_episode = 1
     checkpoint_path = None
 
-    if not fresh:
+    if not fresh and not test:
         checkpoint_path, start_episode_found = find_latest_checkpoint(ALTRUISTIC_DIR)
         if checkpoint_path:
             start_episode = start_episode_found + 1
@@ -113,60 +131,61 @@ def train(fresh: bool = False):
     print("=" * 60)
     print("  ALTRUISTIC AGENT TRAINING")
     print("=" * 60)
-    print(f"  Target      : seat 0 (human player)")
-    print(f"  Seat 0 mix  : 50% random + 50% rule-v1")
-    print(f"  Episodes    : {start_episode:,} -> {NUM_EPISODES:,}")
+    print(f"  Target          : seat 0 (human player)")
+    print(f"  Opponent pool   : {ALTRUISTIC_POOL} (equal weights)")
+    print(f"  Voluntary draw  : DISABLED for bots (help by playing cards)")
+    print(f"  Network         : [256, 256]")
+    print(f"  Episodes        : {start_episode:,} -> {num_episodes:,}")
+    if test:
+        print(f"  Mode            : SMOKE TEST")
     if checkpoint_path:
-        print(f"  Resume from : {checkpoint_path}")
+        print(f"  Resume from     : {checkpoint_path}")
     else:
-        print(f"  Status      : Starting fresh")
-    print(f"  Model dir   : {MODEL_DIR}")
+        print(f"  Status          : Starting fresh")
+    print(f"  Model dir       : {MODEL_DIR}")
     print("=" * 60)
     print()
 
-    if start_episode > NUM_EPISODES:
+    if start_episode > num_episodes:
         print("Already completed all episodes. Use --fresh to restart.")
         return
 
-    # Create game and agents
     game = UnoGame()
 
-    # Create the RL agent — load checkpoint if resuming
     if checkpoint_path:
         rl_agent = RLAgent(model_path=checkpoint_path)
     else:
         rl_agent = RLAgent()
 
-    # Create mixed seat 0 opponents
-    seat0_random = RandomAgent(num_actions=NUM_ACTIONS)
-    seat0_rule = load_model('uno-rule-v1').agents[0]
-    seat0_options = [seat0_random, seat0_rule]
+    pool = create_opponent_pool(ALTRUISTIC_POOL)
+    logger = TrainingLogger(MODEL_DIR, "altruistic")
 
-    # Initial agent assignment (seat 0 will be swapped each episode)
-    agents = [None] * NUM_PLAYERS
-    agents[0] = seat0_random  # placeholder, swapped below
-    for seat in BOT_SEATS:
-        agents[seat] = rl_agent.agent
-
-    game.set_agents(agents)
-
-    # Always target seat 0
     game.set_target_seat(PLAYER_SEAT)
 
-    # Altruistic helps by playing smart cards, not by passing
-    # (voluntary draw disabled — differentiates from hyper altruistic)
-    game.set_allow_voluntary_draw(False)
+    selfish_entry = None
+    selfish_check_episode = int(num_episodes * SELFISH_CHECKPOINT_START)
 
-    # Training loop
-    for episode in range(start_episode, NUM_EPISODES + 1):
-        # Randomly pick seat 0 opponent each episode
-        agents[0] = random.choice(seat0_options)
+    for episode in range(start_episode, num_episodes + 1):
+        # Try loading selfish checkpoint after 20%
+        if episode == selfish_check_episode:
+            selfish_entry = try_load_selfish_checkpoint(MODEL_DIR)
+            if selfish_entry:
+                print(f"  + Selfish checkpoint loaded as opponent")
+
+        # Pick opponent
+        name, seat0_agent, seat0_vd = pick_opponent(pool, selfish_entry)
+
+        agents = [None] * NUM_PLAYERS
+        agents[0] = seat0_agent
+        for seat in BOT_SEATS:
+            agents[seat] = rl_agent.agent
+
         game.set_agents(agents)
+        # Seat 0 VD follows opponent type, bots have VD disabled
+        game.set_max_voluntary_draws({0: seat0_vd, 1: 0, 2: 0, 3: 0})
 
-        # Run one game
         result = game.run_game(is_training=True)
 
-        # Feed transitions with ALTRUISTIC reward (seat 0 winning = good)
         for seat in BOT_SEATS:
             transitions = game.get_training_data_custom_reward(
                 result['trajectories'],
@@ -177,34 +196,36 @@ def train(fresh: bool = False):
             for transition in transitions:
                 rl_agent.feed(transition)
 
-        # Periodic evaluation (always use rule-v1 for consistent eval)
-        if episode % EVAL_EVERY == 0:
-            agents[0] = seat0_rule
-            game.set_agents(agents)
+        if episode % eval_every == 0:
+            wins, avg_game_length, vd_per_seat = evaluate(
+                game, rl_agent, eval_num_games
+            )
+            loss, epsilon, buffer_size = get_dqn_metrics(rl_agent)
 
-            wins = evaluate(game, EVAL_NUM_GAMES)
-            pct_done = episode / NUM_EPISODES * 100
-            bar_len = 20
-            filled = int(bar_len * episode / NUM_EPISODES)
-            bar = "█" * filled + "░" * (bar_len - filled)
+            print_eval_header(episode, num_episodes)
+            print_eval_metrics(
+                wins, eval_num_games, loss, epsilon,
+                avg_game_length, vd_per_seat,
+                buffer_size, REPLAY_MEMORY_SIZE,
+                seat0_label="helped",
+                bots_label="altruistic",
+            )
 
-            print()
-            print(f"  ┌─ Episode {episode:,}/{NUM_EPISODES:,} ({pct_done:.0f}%) [{bar}]")
-            print(f"  │  Seat 0 (helped)     : {wins[0]:>3}/{EVAL_NUM_GAMES}  ({wins[0]/EVAL_NUM_GAMES:.1%})")
-            bot_wins = sum(wins[s] for s in BOT_SEATS)
-            print(f"  │  Bots (altruistic)   : {bot_wins:>3}/{EVAL_NUM_GAMES}  ({bot_wins/EVAL_NUM_GAMES:.1%})")
-            print(f"  └{'─' * 50}")
+            logger.log_eval(
+                episode, wins, eval_num_games, loss, epsilon,
+                avg_game_length, vd_per_seat, buffer_size,
+            )
 
-        # Periodic save
-        if episode % SAVE_EVERY == 0:
+        if episode % save_every == 0:
             rl_agent.save(ALTRUISTIC_DIR, f"checkpoint_{episode}.pt")
-            print(f"  ✓ Checkpoint saved: episode {episode:,}")
+            logger.plot()
+            print(f"  \u2713 Checkpoint saved: episode {episode:,}")
 
-    # Final save
     rl_agent.save(ALTRUISTIC_DIR, "altruistic_agent.pt")
+    logger.plot()
     print()
     print("=" * 60)
-    print(f"  TRAINING COMPLETE — saved to {ALTRUISTIC_DIR}/altruistic_agent.pt")
+    print(f"  TRAINING COMPLETE \u2014 saved to {ALTRUISTIC_DIR}/altruistic_agent.pt")
     print("=" * 60)
 
 
@@ -212,5 +233,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--fresh', action='store_true',
                         help='Start training from scratch, ignoring checkpoints')
+    parser.add_argument('--test', action='store_true',
+                        help='Smoke test: 200 episodes with fast eval')
     args = parser.parse_args()
-    train(fresh=args.fresh)
+    train(fresh=args.fresh, test=args.test)

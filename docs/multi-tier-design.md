@@ -8,23 +8,12 @@ Replaces the old AdaptiveAgent coin-flip blending approach.
 
 | Tier | Name | Reward Structure | Training | Status |
 |------|------|-----------------|----------|--------|
-| 1 | **Hyper Adversarial** | Selfish (lucky bot) + Cooperative (support bots) | Bidding system needed | Future |
-| 2 | **Adversarial** | Team: +1 when ANY bot wins, -1 when seat 0 wins | `train_adversarial.py` | Trained (100k episodes) |
-| 3 | **Selfish** | Individual: +1 only when THIS bot wins | `train_selfish.py` | Trained (100k episodes) |
+| 1 | **Hyper Adversarial** | Selfish (star) + Cooperative support (+2/+1/-2) | Joint training with frozen selfish | Trained |
+| 2 | **Adversarial** | Team: +1 when ANY bot wins, -1 when seat 0 wins | `train_adversarial.py` | Trained |
+| 3 | **Selfish** | Individual: +1 only when THIS bot wins | `train_selfish.py` | Trained |
 | 4 | **Random** | None | RandomAgent, no training | Done |
-| 5 | **Altruistic** | +1 when seat 0 wins, -1 self win, -1 other win | `train_altruistic.py` | Trained (100k episodes) |
-| 6 | **Hyper Altruistic** | +2 seat 0 wins, -1 self/other, -0.5 per pass | `train_hyper_altruistic.py` | Trained (100k episodes) |
-
-### Training Results Summary
-
-| Agent | Seat 0 Win Rate | Notes |
-|-------|-----------------|-------|
-| Adversarial | ~14% | Team coordination suppresses seat 0 |
-| Selfish | ~18-22% | Individual play, high variance |
-| Random | ~25% | Baseline (no intelligence) |
-| Altruistic | ~31% | Actively helps seat 0 win |
-| Cooperative | ~25% | Neutral (helps bot teammate, not seat 0) |
-| Hyper Altruistic | ~34-40% | Strongest seat 0 boost, maxes voluntary draws |
+| 5 | **Altruistic** | +1 when seat 0 wins, -1 self win, -1 other win | `train_altruistic.py` | Trained |
+| 6 | **Hyper Altruistic** | +2 seat 0 wins, -1 self/other, -0.5 per pass | `train_hyper_altruistic.py` | Trained |
 
 ## Key Design Decisions
 
@@ -38,7 +27,7 @@ Replaces the old AdaptiveAgent coin-flip blending approach.
 - Example: seat 1 = selfish, seat 2 = random, seat 3 = altruistic
 - Creates fine-grained win rate control through combinations
 - Mixable tiers: selfish, random, altruistic, hyper altruistic, adversarial (operate independently)
-- Non-mixable: hyper adversarial (requires all bots coordinating)
+- Non-mixable: hyper adversarial (requires support bots coordinating with star)
 - Hyper altruistic is most impactful at seats 1 and 3 (adjacent to seat 0 in both turn directions)
 
 ### Baseline & Distribution
@@ -69,10 +58,10 @@ Replaces the old AdaptiveAgent coin-flip blending approach.
 
 ## Implementation Priority
 1. ~~**Selfish** training~~ — done
-2. ~~**Adversarial**, **altruistic**, **cooperative**, **hyper altruistic**~~ — all trained (100k episodes each)
-3. ~~**Simulate** all combinations to build win rate lookup table~~ — simulation tool done
-4. **Mixing controller** (assign tiers to seats based on win rate) — next step
-5. **Hyper adversarial** (bidding system, selfish + cooperative agents) — last priority
+2. ~~**Adversarial**, **altruistic**, **hyper altruistic**~~ — all trained
+3. ~~**Hyper adversarial** (joint training: frozen selfish + cooperative support)~~ — trained
+4. ~~**Simulate** all combinations to build win rate lookup table~~ — simulation tool done
+5. **Mixing controller** (assign tiers to seats based on win rate) — next step
 
 ## Voluntary Draw Policy
 
@@ -84,23 +73,27 @@ Per-seat voluntary draw caps match each agent's training configuration. This pre
 | adversarial | enabled | 5 per game | Trained with cap 5 |
 | hyper_altruistic | enabled | 5 per game | Trained with cap 5 |
 | altruistic | **disabled** | 0 | Trained with draw off |
-| cooperative | **disabled** | 0 | Trained with draw off |
-| random | disabled | 0 | N/A (no training) |
-| rule-v1 | disabled | 0 | N/A (heuristic) |
-| noob/casual/pro | disabled | 0 | N/A (heuristic bots) |
+| hyper_adversarial | **disabled** | 0 | Support bots help via card play, not drawing |
+| noob | enabled | 10 per game | Clueless players who draw randomly |
+| random | disabled | 0 | N/A (baseline) |
+| random-vd | enabled | 5 per game | Random agent with VD enabled (training opponent) |
+| rule-v1 | disabled | 0 | Always draws first if allowed — must stay at 0 |
+| casual/pro | disabled | 0 | N/A (heuristic bots) |
 
 Caps are set per-seat via a dict passed to `UnoGame.set_max_voluntary_draws()`:
 ```python
-# Example: seat 0 = no draws, seats 1-3 = different caps per tier
+# Example: seat 0 VD per opponent type, seats 1-3 per agent type
 game.set_max_voluntary_draws({0: 0, 1: 5, 2: 0, 3: 5})
 ```
 
-## Hyper Adversarial Details (Future)
-- Hand strength evaluation to determine "lucky" bot (most likely to win)
-- Lucky bot uses selfish reward (+1 only if IT wins)
-- Other bots use cooperative reward (+1 when lucky bot wins)
-- Bidding: bots evaluate hand strength, controller picks lucky seat
-- All 3 bots must coordinate — cannot mix with other tiers
+## Hyper Adversarial Details
+- Joint training: frozen selfish agent at star seat + cooperative DQN at support seats
+- Star seat rotates among bot seats (1, 2, 3) each training episode
+- Cooperative reward: +2 when star wins, +1 when other bot wins, -2 when seat 0 wins
+- Support bots learn to play cards that help the star win (VD disabled for support)
+- Star uses frozen `selfish_agent.pt` from Phase 1 training (not training, just playing)
+- At runtime: `--target N` specifies which seat is the star (selfish agent sits there)
+- All support bots coordinate — cannot mix with other tiers
 
 ## Hyper Altruistic Details
 - Voluntary draw enabled with cap 5: 'draw' is always a legal action (up to 5 times per game)
@@ -108,9 +101,60 @@ game.set_max_voluntary_draws({0: 0, 1: 5, 2: 0, 3: 5})
 - Slightly stronger help signal than altruistic + voluntary draw available
 - Pass penalty prevents spam; DQN learns optimal pass frequency
 - Mixable with other tiers — most effective at seats 1 and 3 (adjacent to seat 0)
-- Mixed seat 0 opponents (50% random + 50% rule-v1) for robustness
+- Opponent pool: random, rule-v1, noob, casual, pro, random-vd (equal weights)
 - Target seat plane = seat 0 (same as altruistic)
-- Training observation: agent consistently maxes voluntary draws at 5.0/game
+
+## DQN Hyperparameters
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Network | [256, 256] | 720-dim input needs wider layers (~266K params) |
+| Learning rate | 0.0001 | Balanced for [256,256] capacity |
+| Replay buffer | 100,000 | Diverse replay, ~45x turnover |
+| Epsilon decay | 1,000,000 steps | ~44% of training for exploration |
+| Train every | 8 steps | Reduces overfitting on recent data |
+| Batch size | 32 | Standard |
+| Target update | every 500 steps | Stable Q-targets |
+
+## Training Setup
+
+### Opponent Pools
+All training scripts use varied opponent pools at seat 0 instead of a single fixed opponent:
+
+| Script | Opponent Pool | Weighting |
+|--------|-------------|-----------|
+| Selfish | random, rule-v1, noob, casual, pro | Equal (random seat assignment) |
+| Adversarial | random, rule-v1, noob, casual, pro | Weighted strong (pro 30%) |
+| Altruistic | random, rule-v1, noob, casual, pro, random-vd | Equal |
+| Hyper Altruistic | random, rule-v1, noob, casual, pro, random-vd | Equal |
+| Hyper Adversarial | random, rule-v1, noob, casual, pro | Weighted strong (pro 25%) |
+
+After 20% of training, all scripts can pick up selfish checkpoints as additional opponents. This is graceful — returns None if no checkpoint exists yet.
+
+### Selfish Random Seat Assignment
+Selfish training uses random DQN seat placement. Each episode:
+1. Pick DQN seat count from weights: {1:10%, 2:15%, 3:45%, 4:30%}
+2. Randomly assign DQN to those seats
+3. Fill remaining seats with opponents from pool
+4. Per-seat VD caps follow bot type
+
+### Training Order
+```
+Phase 1 (concurrent — overnight):
+  Terminal 1: python -m simulator.training.train_selfish --fresh
+  Terminal 2: python -m simulator.training.train_adversarial --fresh
+  Terminal 3: python -m simulator.training.train_altruistic --fresh
+  Terminal 4: python -m simulator.training.train_hyper_altruistic --fresh
+
+Phase 2 (after selfish finishes):
+  Terminal 5: python -m simulator.training.train_hyper_adversarial --fresh
+```
+
+### Smoke Test
+All scripts accept `--test` for quick validation (200 episodes, ~1-2 min):
+```bash
+python -m simulator.training.train_selfish --test
+```
 
 ## Technical Notes
 - All tiers share same DQN architecture and [12,4,15] enriched state
@@ -119,9 +163,10 @@ game.set_max_voluntary_draws({0: 0, 1: 5, 2: 0, 3: 5})
 - Different tiers = different model weights loaded per seat at runtime
 - RLCard patch: wild_draw_4 always legal (no color restriction)
 - RLCard patch: voluntary draw always legal (draw added to legal actions even with playable cards)
-- Two support models: altruistic (helps human) and cooperative (helps bot teammate)
+- Two support models: altruistic (helps human) and hyper_adversarial (helps bot teammate)
 - Per-seat voluntary draw caps via dict-based `_max_voluntary_draws` in `UnoGame`
 - Models loaded once at startup via `TierModelPool` — no per-game disk I/O
+- Training metrics logged to CSV + matplotlib plots (training_progress.png)
 
 ## Reward Table
 
@@ -130,16 +175,16 @@ game.set_max_voluntary_draws({0: 0, 1: 5, 2: 0, 3: 5})
 | **Adversarial** | -1 (seat 0) | +1 | +1 | — |
 | **Selfish** | — | +1 | -1 | — |
 | **Random** | — | — | — | No reward |
-| **Altruistic** | +1 (seat 0) | -1 | -1 | voluntary draw disabled |
-| **Cooperative** | +1 (rotating) | -1 | -1 | voluntary draw disabled |
+| **Altruistic** | +1 (seat 0) | -1 | -1 | VD disabled |
+| **Hyper Adversarial** (support) | +2 (star seat) | — | +1 (bot) / -2 (seat 0) | VD disabled |
 | **Hyper Altruistic** | +2 (seat 0) | -1 | -1 | -0.5 per voluntary draw |
 
 ## Training Scripts
-- `train_adversarial.py` — team reward, target plane zeros, voluntary draw cap 5
-- `train_selfish.py` — individual reward, target plane zeros, voluntary draw cap 5
-- `train_altruistic.py` — helps seat 0 win, mixed seat 0 opponents (50% random + 50% rule-v1), voluntary draw disabled
-- `train_cooperative.py` — helps bot teammates win, rotates target among seats 1-3, voluntary draw disabled
-- `train_hyper_altruistic.py` — strategic passing, +2 win / -0.5 per pass, voluntary draw cap 5
+- `train_selfish.py` — individual reward, random seat assignment, opponent pool, VD cap 5
+- `train_adversarial.py` — team reward, weighted opponents (strong bias), VD cap 5
+- `train_altruistic.py` — helps seat 0 win, opponent pool + random-vd, VD disabled
+- `train_hyper_altruistic.py` — strategic passing, opponent pool + random-vd, VD cap 5
+- `train_hyper_adversarial.py` — joint training (frozen selfish star + cooperative support), VD: star=5, support=0
 
 ## Simulation Tool
 
@@ -154,24 +199,23 @@ python -m simulator.simulation.simulate --s0 rule-v1 --s1 selfish --s2 selfish -
 # Altruistic bots helping seat 0 win (target auto-set to seat 0)
 python -m simulator.simulation.simulate --s0 casual --s1 altruistic --s2 altruistic --s3 altruistic
 
-# Mix altruistic + cooperative in the same game
-python -m simulator.simulation.simulate --s0 casual --s1 altruistic --s2 cooperative --s3 selfish --target 1
-
-# Cooperative bots helping seat 2
-python -m simulator.simulation.simulate --s0 random --s1 cooperative --s2 selfish --s3 cooperative --target 2
+# Hyper-adversarial team: support bots help selfish star at seat 2
+python -m simulator.simulation.simulate --s0 rule-v1 --s1 hyper_adversarial --s2 selfish --s3 hyper_adversarial --target 2
 
 # Run ALL 125 tier combinations (builds lookup table)
-python -m simulator.simulation.simulate --s0 rule-v1 --all --games 200
+python -m simulator.simulation.simulate --s0 rule-v1 --all --target 0 --games 200
 
 # Baseline sanity check (expect ~25% per seat)
 python -m simulator.simulation.simulate --baseline --games 100
 ```
 
-**Agent choices:** `random`, `rule-v1`, `noob`, `casual`, `pro`, `selfish`, `adversarial`, `altruistic`, `cooperative`, `hyper_altruistic`
+**Agent choices:** `random`, `rule-v1`, `noob`, `casual`, `pro`, `selfish`, `adversarial`, `altruistic`, `hyper_altruistic`, `hyper_adversarial`
+
+Backward compatibility: `cooperative` is an alias for `hyper_adversarial`.
 
 **Target seat (plane 11)** is resolved per-seat automatically:
 - `altruistic` / `hyper_altruistic` — always target seat 0 (hardcoded, matches training)
-- `cooperative` — requires `--target N` from CLI (which bot teammate to help)
+- `hyper_adversarial` — requires `--target N` from CLI (which bot teammate to help)
 - All others — no target (plane 11 all zeros)
 
 Voluntary draw caps are automatically applied per-seat to match each agent's training policy.

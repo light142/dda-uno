@@ -33,17 +33,24 @@ simulator/
 ├── README.md
 ├── config/
 │   ├── simulation.py        # TIER_GAMES, data paths
-│   ├── training.py          # NUM_EPISODES, LR, BATCH_SIZE, DQN hyperparams
+│   ├── training.py          # NUM_EPISODES, LR, opponent pools, DQN hyperparams
 │   └── tiers.py             # Tier registry, model resolution, voluntary draw policy
 ├── simulation/
-│   └── simulate.py    # Run any tier combination
+│   └── simulate.py          # Run any tier combination
 ├── training/
+│   ├── opponents.py           # Shared opponent pool + selfish checkpoint loading
+│   ├── metrics.py             # TrainingLogger (CSV + matplotlib plots)
+│   ├── train_selfish.py       # Selfish: individual reward, random seat assignment
 │   ├── train_adversarial.py   # Adversarial: team reward, beat seat 0
-│   ├── train_selfish.py       # Selfish: individual reward, each for itself
 │   ├── train_altruistic.py    # Altruistic: help seat 0 (human) win
-│   ├── train_cooperative.py     # Cooperative: help bot teammate win (hyper adversarial)
-│   └── train_hyper_altruistic.py # Hyper Altruistic: strategic passing to help seat 0
+│   ├── train_hyper_altruistic.py # Hyper Altruistic: strategic passing to help seat 0
+│   └── train_hyper_adversarial.py # Hyper Adversarial: joint training (selfish star + cooperative support)
 ├── models/                  # Trained .pt weight files (output)
+│   ├── selfish/               # selfish_agent.pt + checkpoints + metrics
+│   ├── adversarial/           # adversarial_agent.pt + checkpoints + metrics
+│   ├── altruistic/            # altruistic_agent.pt + checkpoints + metrics
+│   ├── hyper_altruistic/      # hyper_altruistic_agent.pt + checkpoints + metrics
+│   └── hyper_adversarial/     # hyper_adversarial_agent.pt + checkpoints + metrics
 └── data/                    # Simulation result JSONs (output)
 ```
 
@@ -62,47 +69,54 @@ pip install -r engine/requirements.txt
 cd ada-uno    # project root — NOT inside simulator/
 ```
 
-### Step 1: Train Agents
+### Step 1: Smoke Test (Before Overnight Training)
 
-Train the adversarial agent (team reward — bots cooperate to beat seat 0):
+Run quick smoke tests to validate the full pipeline before committing to overnight training:
+
 ```bash
-python -m simulator.training.train_adversarial
+python -m simulator.training.train_selfish --test &
+python -m simulator.training.train_adversarial --test &
+python -m simulator.training.train_altruistic --test &
+python -m simulator.training.train_hyper_altruistic --test &
 ```
 
-Train the selfish agent (individual reward — each bot plays for itself):
+Each runs 200 episodes in ~1-2 minutes. Validates: opponent loading, per-seat VD caps, checkpoint save/load, metrics CSV, training plots, selfish checkpoint pickup.
+
+Hyper-adversarial requires a selfish checkpoint — run its smoke test after selfish:
 ```bash
-python -m simulator.training.train_selfish
+python -m simulator.training.train_hyper_adversarial --test
 ```
 
-Train the altruistic agent (helps seat 0 / human player win):
-```bash
-python -m simulator.training.train_altruistic
-```
+### Step 2: Train Agents
 
-Train the cooperative agent (helps bot teammates — for hyper adversarial tier):
-```bash
-python -m simulator.training.train_cooperative
-```
+**Phase 1** — Train 4 agents concurrently (overnight):
 
-Train the hyper altruistic agent (strategic passing — can draw with playable cards):
 ```bash
-python -m simulator.training.train_hyper_altruistic
-```
-
-All training scripts support `--fresh` to ignore checkpoints and start over.
-
-Train all 5 agents in parallel (background jobs):
-```bash
-python -m simulator.training.train_adversarial --fresh &
 python -m simulator.training.train_selfish --fresh &
+python -m simulator.training.train_adversarial --fresh &
 python -m simulator.training.train_altruistic --fresh &
-python -m simulator.training.train_cooperative --fresh &
 python -m simulator.training.train_hyper_altruistic --fresh &
 ```
 
-Models are saved to `simulator/models/`.
+All 4 use opponent pools from the start. After 20% of training, they automatically pick up selfish checkpoints as additional opponents (graceful fallback if none exist yet).
 
-### Step 2: Simulate Tier Combinations
+**Phase 2** — After selfish finishes:
+
+```bash
+python -m simulator.training.train_hyper_adversarial --fresh
+```
+
+Loads the frozen `selfish_agent.pt` from Phase 1 as the star agent.
+
+All training scripts support:
+- `--fresh` — start from scratch, ignore checkpoints
+- `--test` — smoke test: 200 episodes with fast eval
+
+Models are saved to `simulator/models/{tier}/`.
+Training metrics are logged to `simulator/models/{tier}/metrics.csv`.
+Training plots are saved to `simulator/models/{tier}/training_progress.png`.
+
+### Step 3: Simulate Tier Combinations
 
 Test any combination of agents across all 4 seats:
 
@@ -113,40 +127,42 @@ python -m simulator.simulation.simulate --s0 rule-v1 --s1 selfish --s2 selfish -
 # Altruistic bots helping seat 0 win (target auto-set to seat 0)
 python -m simulator.simulation.simulate --s0 casual --s1 altruistic --s2 altruistic --s3 altruistic
 
+# Hyper-adversarial team: support bots help selfish star at seat 2
+python -m simulator.simulation.simulate --s0 rule-v1 --s1 hyper_adversarial --s2 selfish --s3 hyper_adversarial --target 2
+
 # Mix tiers: 2 selfish + 1 altruistic (no --target needed)
 python -m simulator.simulation.simulate --s0 rule-v1 --s1 selfish --s2 altruistic --s3 selfish
 
-# Mix altruistic + cooperative in the same game
-python -m simulator.simulation.simulate --s0 casual --s1 altruistic --s2 cooperative --s3 selfish --target 1
-
-# Cooperative bots helping seat 2
-python -m simulator.simulation.simulate --s0 random --s1 cooperative --s2 selfish --s3 cooperative --target 2
-
 # Run ALL 125 tier combinations (builds lookup table)
-python -m simulator.simulation.simulate --s0 rule-v1 --all --games 200
+python -m simulator.simulation.simulate --s0 rule-v1 --all --target 0 --games 200
 ```
 
-**Agent choices** for any seat: `random`, `rule-v1`, `noob`, `casual`, `pro`, `selfish`, `adversarial`, `altruistic`, `cooperative`, `hyper_altruistic`
+**Agent choices** for any seat: `random`, `rule-v1`, `noob`, `casual`, `pro`, `selfish`, `adversarial`, `altruistic`, `hyper_altruistic`, `hyper_adversarial`
+
+Backward compatibility: `cooperative` is an alias for `hyper_adversarial`.
 
 **Target seat (plane 11)** is resolved per-seat automatically:
 - `altruistic` / `hyper_altruistic` — always target seat 0 (hardcoded, matches training)
-- `cooperative` — requires `--target N` from CLI (which bot teammate to help)
+- `hyper_adversarial` — requires `--target N` from CLI (which bot teammate to help)
 - All others — no target (plane 11 all zeros)
 
 **Voluntary draw** is automatically set per-seat to match each agent's training policy:
 
-| Agent | Voluntary draws | Trained with |
-|-------|----------------|--------------|
-| selfish | 5 per game | cap 5 |
-| adversarial | 5 per game | cap 5 |
-| hyper_altruistic | 5 per game | cap 5 |
-| altruistic | disabled | draw off |
-| cooperative | disabled | draw off |
-| random/rule-v1/bots | disabled | N/A |
+| Agent | VD Cap | Notes |
+|-------|--------|-------|
+| selfish | 5 | Learns strategic draw timing |
+| adversarial | 5 | Learns strategic draw timing |
+| hyper_altruistic | 5 | Learns strategic passing to help seat 0 |
+| hyper_adversarial | 0 | Support bots help via card play, not drawing |
+| altruistic | 0 | Helps via card play, no drawing |
+| noob | 10 | Represents clueless players who draw randomly |
+| random | 0 | Baseline random agent |
+| rule-v1 | 0 | Always draws first if allowed — must stay at 0 |
+| casual / pro | 0 | Filtered draw out |
 
 Results are saved to `simulator/data/tier_results.json`.
 
-### Step 3: Run Baseline (Verify Engine)
+### Step 4: Run Baseline (Verify Engine)
 
 Run random agents to verify ~25% win rate per seat:
 ```bash
@@ -155,39 +171,80 @@ python -m simulator.simulation.simulate --s0 random --s1 random --s2 random --s3
 
 ## Training Details
 
-### Adversarial Agent
-Team reward: +1 when ANY bot wins (seat 0 loses), -1 when seat 0 wins.
-Seat 0 opponent is configurable in `config/training.py`: `"random"`, `"rule-v1"`, or `"self-play"`.
-
 ### Selfish Agent
 Standard individual reward: +1 when THIS bot wins, uses RLCard default payoffs.
-Baseline tier — plays like a real competitive UNO player.
+Random seat assignment: DQN can sit at any seat (0-3) with weighted distribution {1:10%, 2:15%, 3:45%, 4:30%}.
+Opponent pool: random, rule-v1, noob, casual, pro (+ selfish checkpoints after 20%).
+
+### Adversarial Agent
+Team reward: +1 when ANY bot wins (seat 0 loses), -1 when seat 0 wins.
+Opponent pool weighted toward strong opponents (pro 30%, rule-v1 25%, casual 15%, noob 15%, random 10%).
+After 20% of training, includes selfish checkpoints as opponents.
 
 ### Altruistic Agent
 Helps seat 0 (human player) win. Target seat plane (plane 11) = seat 0.
-Mixed seat 0 opponents (50% random + 50% rule-v1) for robust helping strategies.
+Opponent pool: random, rule-v1, noob, casual, pro, random-vd (equal weights).
 Custom reward: +1 seat 0 wins, -1 self wins, -1 other bot wins.
-
-### Cooperative Agent
-Helps a designated bot teammate win. Target seat plane (plane 11) rotates among seats 1-3.
-Used in hyper adversarial tier where support bots help the lucky bot.
-Custom reward: +1 target wins, -1 self wins, -1 other wins.
+Bots have VD disabled (cap 0). Seat 0 VD follows opponent type.
 
 ### Hyper Altruistic Agent
 Like altruistic but can draw (pass) even with playable cards. Learns WHEN passing helps seat 0.
-Voluntary draw enabled: 'draw' is always a legal action.
-Custom reward: +2 seat 0 wins, -1 self wins, -1 other wins, -0.5 per voluntary draw (cumulative).
-Most impactful at seats 1 and 3 (adjacent to seat 0). Mixable with other tiers.
+Opponent pool: random, rule-v1, noob, casual, pro, random-vd (equal weights).
+Custom reward: +2 seat 0 wins, -1 self wins, -1 other wins, -0.5 per voluntary draw.
+Bots have VD cap 5. Seat 0 VD follows opponent type.
+
+### Hyper-Adversarial Agent (replaces Cooperative)
+Joint training: frozen selfish agent at star seat + cooperative DQN at support seats.
+Star seat rotates among bot seats each episode. Opponent pool weighted toward strong.
+Cooperative reward: +2 star wins, +1 other bot wins, -2 seat 0 wins.
+Requires pre-trained `selfish_agent.pt` from Phase 1.
+
+## DQN Hyperparameters
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Network | [256, 256] | 720-dim input needs wider layers |
+| Learning rate | 0.0001 | Balanced for [256,256] capacity |
+| Replay buffer | 100,000 | Diverse replay samples |
+| Epsilon decay | 1,000,000 steps | ~44% of training for exploration |
+| Train every | 8 steps | Reduces overfitting on recent data |
+| Batch size | 32 | Standard |
+| Target update | every 500 steps | Stable Q-targets |
 
 ## Config Reference
 
 | Setting | File | Default | Description |
 |---------|------|---------|-------------|
 | `TIER_GAMES` | config/simulation.py | 500 | Games per tier combination |
-| `SEAT0_OPPONENT` | config/training.py | "rule-v1" | Training opponent type |
+| `OPPONENT_POOL` | config/training.py | [random, rule-v1, noob, casual, pro] | Standard opponent mix |
+| `ALTRUISTIC_POOL` | config/training.py | [+ random-vd] | Includes VD-enabled random |
 | `NUM_EPISODES` | config/training.py | 100,000 | Training episodes |
-| `LEARNING_RATE` | config/training.py | 0.00005 | DQN learning rate |
+| `LEARNING_RATE` | config/training.py | 0.0001 | DQN learning rate |
 | `BATCH_SIZE` | config/training.py | 32 | DQN batch size |
-| `REPLAY_MEMORY_SIZE` | config/training.py | 20,000 | Experience replay buffer |
+| `REPLAY_MEMORY_SIZE` | config/training.py | 100,000 | Experience replay buffer |
 | `EVAL_EVERY` | config/training.py | 1,000 | Evaluate every N episodes |
 | `SAVE_EVERY` | config/training.py | 10,000 | Checkpoint every N episodes |
+| `SELFISH_SEAT_WEIGHTS` | config/training.py | {1:10, 2:15, 3:45, 4:30} | DQN seat count distribution |
+| `SELFISH_CHECKPOINT_START` | config/training.py | 0.20 | Include selfish checkpoints after 20% |
+
+## Training Monitoring
+
+Each training script outputs formatted eval blocks every `EVAL_EVERY` episodes:
+
+```
+  ┌─ Episode 5,000/100,000 (5%) [█░░░░░░░░░░░░░░░░░░░]
+  │  Seat 0 (opponent)   :  22/100  (22.0%)
+  │  Bots (selfish)      :  78/100  (78.0%)
+  │  Loss                : 0.0342
+  │  Epsilon             : 0.891
+  │  Avg game length     : 14.2 turns
+  │  Avg VD per seat     : s0=0.0  s1=1.3  s2=0.8  s3=1.5
+  │  Buffer              : 45,200 / 100,000
+  └──────────────────────────────────────────────────
+```
+
+Training plots (`training_progress.png`) include 4 subplots:
+1. Win rates over episodes (seat 0 vs bots)
+2. DQN loss curve
+3. Epsilon schedule
+4. Average game length

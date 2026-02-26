@@ -3,105 +3,113 @@
 Team reward: +1 when ANY bot wins (seat 0 loses), -1 when seat 0 wins.
 All bots share the same goal so they learn to cooperate against seat 0.
 
-Supports resume: automatically finds the latest checkpoint and continues.
+Opponent pool weighted toward strong opponents (pro, rule-v1).
+After 20% of training, includes selfish checkpoints as opponents.
+
+Supports resume, --fresh, and --test flags.
 
 Usage:
     python -m simulator.training.train_adversarial
-    python -m simulator.training.train_adversarial --fresh   # ignore checkpoints, start over
+    python -m simulator.training.train_adversarial --fresh
+    python -m simulator.training.train_adversarial --test
 """
 
 import os
 import sys
 import glob
+import random
 import argparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-
-from rlcard.agents import RandomAgent
-from rlcard.models import load as load_model
 
 from engine.game_logic.game import UnoGame
 from engine.game_logic.agents import RLAgent
 from engine.config.game import NUM_PLAYERS, NUM_ACTIONS, PLAYER_SEAT, BOT_SEATS
 from simulator.config.training import (
-    SEAT0_OPPONENT, NUM_EPISODES, EVAL_EVERY, EVAL_NUM_GAMES,
-    MODEL_DIR, SAVE_EVERY,
+    NUM_EPISODES, EVAL_EVERY, EVAL_NUM_GAMES,
+    MODEL_DIR, SAVE_EVERY, OPPONENT_POOL,
+    SELFISH_CHECKPOINT_START, REPLAY_MEMORY_SIZE,
+)
+from simulator.config.tiers import VOLUNTARY_DRAW_POLICY
+from simulator.training.opponents import (
+    create_opponent_pool, pick_opponent, try_load_selfish_checkpoint,
+)
+from simulator.training.metrics import (
+    TrainingLogger, count_voluntary_draws, get_dqn_metrics,
+    print_eval_header, print_eval_metrics,
 )
 
 ADVERSARIAL_DIR = os.path.join(MODEL_DIR, "adversarial")
 
+# Opponent weights: bias toward strong opponents
+ADVERSARIAL_WEIGHTS = {
+    "random": 10, "rule-v1": 25, "noob": 15,
+    "casual": 15, "pro": 30,
+}
 
-def adversarial_reward(payoffs: list, seat: int) -> float:
-    """Team reward for adversarial agents.
 
-    All bots share the same goal: seat 0 must lose.
-
-    Args:
-        payoffs: Original payoffs from the game.
-        seat: The bot's seat index.
-
-    Returns:
-        Custom reward value.
-    """
+def adversarial_reward(payoffs, seat):
+    """Team reward: +1 if any bot wins, -1 if seat 0 wins."""
     winner = max(range(len(payoffs)), key=lambda i: payoffs[i])
-
     if winner == PLAYER_SEAT:
-        return -1.0   # Seat 0 won — team failed
+        return -1.0
     else:
-        return 1.0    # Any bot won — team succeeded
+        return 1.0
 
 
-def create_seat0_opponent(opponent_type: str):
-    """Create the seat 0 opponent based on config.
+def pick_weighted_opponent(pool, selfish_entry=None):
+    """Pick opponent with adversarial weighting (bias toward strong)."""
+    candidates = list(pool)
+    if selfish_entry is not None:
+        agent, vd_cap = selfish_entry
+        candidates.append(("selfish-ckpt", agent, vd_cap))
 
-    Args:
-        opponent_type: "random", "rule-v1", or "self-play"
-
-    Returns:
-        Agent for seat 0 (or None for self-play, handled separately).
-    """
-    if opponent_type == "random":
-        return RandomAgent(num_actions=NUM_ACTIONS)
-    elif opponent_type == "rule-v1":
-        return load_model('uno-rule-v1').agents[0]
-    elif opponent_type == "self-play":
-        return None  # Will use the training agent itself
-    else:
-        raise ValueError(f"Unknown opponent type: {opponent_type}")
+    weights = [ADVERSARIAL_WEIGHTS.get(name, 15) for name, _, _ in candidates]
+    return random.choices(candidates, weights=weights, k=1)[0]
 
 
-def evaluate(game: UnoGame, agent: RLAgent, num_games: int) -> dict:
-    """Evaluate the agent over multiple games.
+def evaluate(game, rl_agent, num_games):
+    """Evaluate with rule-v1 at seat 0."""
+    from rlcard.models import load as load_model
+    eval_opponent = load_model('uno-rule-v1').agents[0]
 
-    Args:
-        game: UnoGame instance with agents set.
-        agent: The agent being evaluated.
-        num_games: Number of evaluation games.
+    agents = [None] * NUM_PLAYERS
+    agents[0] = eval_opponent
+    for seat in BOT_SEATS:
+        agents[seat] = rl_agent.agent
+    game.set_agents(agents)
+    game.set_max_voluntary_draws({0: 0, 1: 5, 2: 5, 3: 5})
 
-    Returns:
-        dict with win counts per seat.
-    """
     wins = {i: 0 for i in range(NUM_PLAYERS)}
+    total_game_length = 0
+    total_vd = {i: 0 for i in range(NUM_PLAYERS)}
 
     for _ in range(num_games):
         result = game.run_game(is_training=False)
         wins[result['winner']] += 1
 
-    return wins
+        game_len = sum(
+            len(result['trajectories'][s]) // 2
+            for s in range(NUM_PLAYERS)
+        )
+        total_game_length += game_len
+
+        for s in range(NUM_PLAYERS):
+            total_vd[s] += count_voluntary_draws(result['trajectories'], s)
+
+    avg_game_length = total_game_length / num_games
+    vd_per_seat = {s: total_vd[s] / num_games for s in range(NUM_PLAYERS)}
+
+    return wins, avg_game_length, vd_per_seat
 
 
-def find_latest_checkpoint(checkpoint_dir: str):
-    """Find the latest checkpoint file and its episode number.
-
-    Returns:
-        (path, episode) or (None, 0) if no checkpoints exist.
-    """
+def find_latest_checkpoint(checkpoint_dir):
+    """Find the latest checkpoint file and its episode number."""
     pattern = os.path.join(checkpoint_dir, "checkpoint_*.pt")
     files = glob.glob(pattern)
     if not files:
         return None, 0
 
-    # Extract episode numbers and find the highest
     best_path, best_ep = None, 0
     for f in files:
         name = os.path.basename(f)
@@ -116,13 +124,17 @@ def find_latest_checkpoint(checkpoint_dir: str):
     return best_path, best_ep
 
 
-def train(fresh: bool = False):
+def train(fresh=False, test=False):
     """Main training loop for the adversarial agent."""
-    # Check for resume
+    num_episodes = 200 if test else NUM_EPISODES
+    eval_every = 50 if test else EVAL_EVERY
+    save_every = 100 if test else SAVE_EVERY
+    eval_num_games = 20 if test else EVAL_NUM_GAMES
+
     start_episode = 1
     checkpoint_path = None
 
-    if not fresh:
+    if not fresh and not test:
         checkpoint_path, start_episode_found = find_latest_checkpoint(ADVERSARIAL_DIR)
         if checkpoint_path:
             start_episode = start_episode_found + 1
@@ -131,50 +143,57 @@ def train(fresh: bool = False):
     print("=" * 60)
     print("  ADVERSARIAL AGENT TRAINING")
     print("=" * 60)
-    print(f"  Opponent    : {SEAT0_OPPONENT}")
-    print(f"  Episodes    : {start_episode:,} -> {NUM_EPISODES:,}")
+    print(f"  Opponent pool   : {OPPONENT_POOL} (weighted strong)")
+    print(f"  Network         : [256, 256]")
+    print(f"  Episodes        : {start_episode:,} -> {num_episodes:,}")
+    if test:
+        print(f"  Mode            : SMOKE TEST")
     if checkpoint_path:
-        print(f"  Resume from : {checkpoint_path}")
+        print(f"  Resume from     : {checkpoint_path}")
     else:
-        print(f"  Status      : Starting fresh")
-    print(f"  Model dir   : {MODEL_DIR}")
+        print(f"  Status          : Starting fresh")
+    print(f"  Model dir       : {MODEL_DIR}")
     print("=" * 60)
     print()
 
-    if start_episode > NUM_EPISODES:
+    if start_episode > num_episodes:
         print("Already completed all episodes. Use --fresh to restart.")
         return
 
-    # Create game and agents
     game = UnoGame()
-    game.set_max_voluntary_draws(5)
 
-    # Create the RL agent — load checkpoint if resuming
     if checkpoint_path:
         rl_agent = RLAgent(model_path=checkpoint_path)
     else:
         rl_agent = RLAgent()
 
-    # Create seat 0 opponent
-    seat0 = create_seat0_opponent(SEAT0_OPPONENT)
-    if seat0 is None:
-        # Self-play: seat 0 also uses the RL agent
-        seat0 = rl_agent.agent
+    pool = create_opponent_pool(OPPONENT_POOL)
+    logger = TrainingLogger(MODEL_DIR, "adversarial")
 
-    # Assign agents: seat 0 = opponent, seats 1-3 = RL agent
-    agents = [None] * NUM_PLAYERS
-    agents[0] = seat0
-    for seat in BOT_SEATS:
-        agents[seat] = rl_agent.agent  # Share the same DQNAgent across bot seats
+    selfish_entry = None
+    selfish_check_episode = int(num_episodes * SELFISH_CHECKPOINT_START)
 
-    game.set_agents(agents)
+    for episode in range(start_episode, num_episodes + 1):
+        # Try loading selfish checkpoint after 20%
+        if episode == selfish_check_episode:
+            selfish_entry = try_load_selfish_checkpoint(MODEL_DIR)
+            if selfish_entry:
+                print(f"  + Selfish checkpoint loaded as opponent")
 
-    # Training loop
-    for episode in range(start_episode, NUM_EPISODES + 1):
-        # Run one game (training mode)
+        # Pick opponent
+        name, seat0_agent, seat0_vd = pick_weighted_opponent(pool, selfish_entry)
+
+        agents = [None] * NUM_PLAYERS
+        agents[0] = seat0_agent
+        for seat in BOT_SEATS:
+            agents[seat] = rl_agent.agent
+
+        game.set_agents(agents)
+        game.set_max_voluntary_draws({0: seat0_vd, 1: 5, 2: 5, 3: 5})
+
         result = game.run_game(is_training=True)
 
-        # Feed transitions with TEAM reward (any bot winning = +1 for all bots)
+        # Feed with team adversarial reward
         for seat in BOT_SEATS:
             transitions = game.get_training_data_custom_reward(
                 result['trajectories'],
@@ -185,36 +204,43 @@ def train(fresh: bool = False):
             for transition in transitions:
                 rl_agent.feed(transition)
 
-        # Periodic evaluation
-        if episode % EVAL_EVERY == 0:
-            wins = evaluate(game, rl_agent, EVAL_NUM_GAMES)
-            bot_wins = sum(wins[s] for s in BOT_SEATS)
-            pct_done = episode / NUM_EPISODES * 100
-            bar_len = 20
-            filled = int(bar_len * episode / NUM_EPISODES)
-            bar = "█" * filled + "░" * (bar_len - filled)
+        if episode % eval_every == 0:
+            wins, avg_game_length, vd_per_seat = evaluate(
+                game, rl_agent, eval_num_games
+            )
+            loss, epsilon, buffer_size = get_dqn_metrics(rl_agent)
 
-            print()
-            print(f"  ┌─ Episode {episode:,}/{NUM_EPISODES:,} ({pct_done:.0f}%) [{bar}]")
-            print(f"  │  Seat 0 (opponent)    : {wins[0]:>3}/{EVAL_NUM_GAMES}  ({wins[0]/EVAL_NUM_GAMES:.1%})")
-            print(f"  │  Bots (adversarial)   : {bot_wins:>3}/{EVAL_NUM_GAMES}  ({bot_wins/EVAL_NUM_GAMES:.1%})")
-            print(f"  └{'─' * 50}")
+            print_eval_header(episode, num_episodes)
+            print_eval_metrics(
+                wins, eval_num_games, loss, epsilon,
+                avg_game_length, vd_per_seat,
+                buffer_size, REPLAY_MEMORY_SIZE,
+                bots_label="adversarial",
+            )
 
-        # Periodic save
-        if episode % SAVE_EVERY == 0:
+            logger.log_eval(
+                episode, wins, eval_num_games, loss, epsilon,
+                avg_game_length, vd_per_seat, buffer_size,
+            )
+
+        if episode % save_every == 0:
             rl_agent.save(ADVERSARIAL_DIR, f"checkpoint_{episode}.pt")
-            print(f"  ✓ Checkpoint saved: episode {episode:,}")
+            logger.plot()
+            print(f"  \u2713 Checkpoint saved: episode {episode:,}")
 
-    # Final save
     rl_agent.save(ADVERSARIAL_DIR, "adversarial_agent.pt")
+    logger.plot()
     print()
     print("=" * 60)
-    print(f"  TRAINING COMPLETE — saved to {ADVERSARIAL_DIR}/adversarial_agent.pt")
+    print(f"  TRAINING COMPLETE \u2014 saved to {ADVERSARIAL_DIR}/adversarial_agent.pt")
     print("=" * 60)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--fresh', action='store_true', help='Start training from scratch, ignoring checkpoints')
+    parser.add_argument('--fresh', action='store_true',
+                        help='Start training from scratch, ignoring checkpoints')
+    parser.add_argument('--test', action='store_true',
+                        help='Smoke test: 200 episodes with fast eval')
     args = parser.parse_args()
-    train(fresh=args.fresh)
+    train(fresh=args.fresh, test=args.test)

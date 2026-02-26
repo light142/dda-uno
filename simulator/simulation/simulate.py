@@ -15,8 +15,8 @@ Usage:
     # Altruistic helping seat 0
     python -m simulator.simulation.simulate --s0 casual --s1 altruistic --s2 altruistic --s3 altruistic --target 0
 
-    # Cooperative helping seat 2
-    python -m simulator.simulation.simulate --s0 random --s1 cooperative --s2 selfish --s3 cooperative --target 2
+    # Hyper-adversarial helping seat 2
+    python -m simulator.simulation.simulate --s0 random --s1 hyper_adversarial --s2 selfish --s3 hyper_adversarial --target 2
 
     # All 125 combos for seats 1-3 against rule-v1
     python -m simulator.simulation.simulate --s0 rule-v1 --all --target 0 --games 200
@@ -37,14 +37,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from engine.game_logic.game import UnoGame
 from engine.config.game import NUM_PLAYERS, PLAYER_SEAT, BOT_SEATS
 from simulator.config.tiers import (
-    AGENT_CHOICES, MIXABLE_TIERS, TARGET_SEAT_TIERS, FIXED_TARGET,
-    VOLUNTARY_DRAW_POLICY, TierModelPool,
+    AGENT_CHOICES, AGENT_ALIASES, MIXABLE_TIERS, TARGET_SEAT_TIERS, FIXED_TARGET,
+    VOLUNTARY_DRAW_POLICY, TierModelPool, resolve_agent_name,
 )
 from simulator.config.simulation import TIER_GAMES, TIER_RESULTS_PATH, DATA_DIR
 
 
 def needs_cli_target(agents: list) -> bool:
-    """Check if any agent needs --target from CLI (cooperative only).
+    """Check if any agent needs --target from CLI (hyper_adversarial only).
 
     Altruistic/hyper_altruistic have fixed targets (seat 0) and don't need CLI input.
     """
@@ -55,7 +55,7 @@ def build_target_dict(seats, cli_target):
     """Build per-seat target dict from agent types and CLI --target.
 
     - altruistic/hyper_altruistic → always 0 (hardcoded)
-    - cooperative → uses cli_target
+    - hyper_adversarial → uses cli_target
     - everything else → None
     """
     targets = {}
@@ -91,7 +91,7 @@ def run_combo(game, pool, seats, cli_target, num_games, show_progress=False):
     agents = [pool.get(seats[i]) for i in range(NUM_PLAYERS)]
     game.set_agents(agents)
 
-    # Per-seat targets: altruistic/hyper_alt → 0, cooperative → cli_target, rest → None
+    # Per-seat targets: altruistic/hyper_alt → 0, hyper_adversarial → cli_target, rest → None
     game.set_target_seat(build_target_dict(seats, cli_target))
 
     # Set per-seat voluntary draw caps matching training policy
@@ -133,13 +133,13 @@ def run_combo(game, pool, seats, cli_target, num_games, show_progress=False):
 
 def run_single(args):
     """Run a single combination."""
-    seats = [args.s0, args.s1, args.s2, args.s3]
+    seats = [resolve_agent_name(a) for a in [args.s0, args.s1, args.s2, args.s3]]
     target_seat = args.target
 
-    # Validate: only cooperative needs --target from CLI
+    # Validate: only hyper_adversarial needs --target from CLI
     if needs_cli_target(seats) and target_seat is None:
-        print("ERROR: Using cooperative agents requires --target N")
-        print("  Example: --target 2  (cooperative bots help seat 2 win)")
+        print("ERROR: Using hyper_adversarial agents requires --target N")
+        print("  Example: --target 2  (hyper_adversarial bots help seat 2 win)")
         print("  Note: altruistic/hyper_altruistic always target seat 0 automatically.")
         sys.exit(1)
 
@@ -192,17 +192,17 @@ def run_single(args):
 
 def run_all_combos(args):
     """Enumerate all mixable tier combinations for seats 1-3."""
-    seat0 = args.s0
+    seat0 = resolve_agent_name(args.s0)
     target_seat = args.target
     tiers = MIXABLE_TIERS
     combos = list(itertools.product(tiers, repeat=3))
     total = len(combos)
 
-    # Check if any mixable tier needs --target from CLI (cooperative only)
-    has_cooperative = any(t in TARGET_SEAT_TIERS and t not in FIXED_TARGET for t in tiers)
-    if has_cooperative and target_seat is None:
-        print("ERROR: Mixable tiers include cooperative which requires --target N")
-        print("  Example: --target 2  (cooperative bots help seat 2 win)")
+    # Check if any mixable tier needs --target from CLI
+    needs_target = any(t in TARGET_SEAT_TIERS and t not in FIXED_TARGET for t in tiers)
+    if needs_target and target_seat is None:
+        print("ERROR: Mixable tiers include hyper_adversarial which requires --target N")
+        print("  Example: --target 2  (hyper_adversarial bots help seat 2 win)")
         sys.exit(1)
 
     print()
@@ -297,18 +297,19 @@ def main():
 """,
     )
 
-    # Seat assignments
+    # Seat assignments (include aliases for backward compat)
+    valid_choices = AGENT_CHOICES + list(AGENT_ALIASES.keys())
     for i in range(4):
         default = 'rule-v1' if i == 0 else 'selfish'
         parser.add_argument(
             f'--s{i}', type=str, default=default,
-            choices=AGENT_CHOICES,
+            choices=valid_choices,
             help=f'Agent for seat {i} (default: {default})',
         )
 
     parser.add_argument(
         '--target', type=int, default=None, choices=[0, 1, 2, 3],
-        help='Target seat for cooperative/altruistic agents (plane 11)',
+        help='Target seat for hyper_adversarial/altruistic agents (plane 11)',
     )
     parser.add_argument(
         '--all', action='store_true',
