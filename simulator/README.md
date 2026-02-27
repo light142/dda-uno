@@ -36,7 +36,8 @@ simulator/
 │   ├── training.py          # NUM_EPISODES, LR, opponent pools, DQN hyperparams
 │   └── tiers.py             # Tier registry, model resolution, voluntary draw policy
 ├── simulation/
-│   └── simulate.py          # Run any tier combination
+│   ├── simulate.py          # Run any tier combination
+│   └── game_stats.py        # Rich per-game stats collector + plots
 ├── training/
 │   ├── opponents.py           # Shared opponent pool + selfish checkpoint loading
 │   ├── metrics.py             # TrainingLogger (CSV + matplotlib plots)
@@ -122,10 +123,16 @@ Test any combination of agents across all 4 seats:
 
 ```bash
 # Specific combo: 3 selfish bots vs rule-v1
-python -m simulator.simulation.simulate --s0 rule-v1 --s1 selfish --s2 selfish --s3 selfish --games 500
+python -m simulator.simulation.simulate --s0 rule-v1 --s1 selfish --s2 selfish --s3 selfish --games 10000
 
 # Altruistic bots helping seat 0 win (target auto-set to seat 0)
-python -m simulator.simulation.simulate --s0 casual --s1 altruistic --s2 altruistic --s3 altruistic
+python -m simulator.simulation.simulate --s0 casual --s1 altruistic --s2 altruistic --s3 altruistic --games 10000
+
+# Hyper-altruistic bots helping seat 0 win (strategic passing enabled)
+python -m simulator.simulation.simulate --s0 noob --s1 hyper_altruistic --s2 hyper_altruistic --s3 hyper_altruistic --games 10000
+
+# Adversarial bots making seat 0 lose
+python -m simulator.simulation.simulate --s0 pro --s1 adversarial --s2 adversarial --s3 adversarial --games 10000
 
 # Hyper-adversarial team: support bots help selfish star at seat 2
 python -m simulator.simulation.simulate --s0 rule-v1 --s1 hyper_adversarial --s2 selfish --s3 hyper_adversarial --target 2
@@ -160,7 +167,29 @@ Backward compatibility: `cooperative` is an alias for `hyper_adversarial`.
 | rule-v1 | 0 | Always draws first if allowed — must stay at 0 |
 | casual / pro | 0 | Filtered draw out |
 
-Results are saved to `simulator/data/tier_results.json`.
+**Statistics and plots** are collected by default for single-combo runs:
+- Use `--no-stats` to skip stats collection (faster, no plot)
+- Use `--stats` to enable stats for `--all` mode (off by default)
+
+Plots are saved with descriptive names based on the seat agents:
+```
+simulator/data/sim_cas_halt_halt_halt_1000g_stats.png
+simulator/data/sim_rv1_sel_sel_sel_500g_stats.png
+```
+
+Short names: `rnd`=random, `rv1`=rule-v1, `cas`=casual, `pro`=pro, `sel`=selfish, `adv`=adversarial, `alt`=altruistic, `halt`=hyper_altruistic, `hadv`=hyper_adversarial
+
+Re-running the same combo renames the old plot with a timestamp instead of overwriting.
+
+Simulation plots (`*_stats.png`) include 6 subplots:
+1. **Win Rate Convergence** — per-seat win rate over games with 95% CI error bars
+2. **End Hand Size** — box plot of cards remaining at game end per seat (0 = winner)
+3. **Offensive Targeting Heatmap** — attacker × victim matrix (Blues colormap, diagonal masked)
+4. **Attacks on Each Seat** — grouped bars showing adjacent attackers per victim (s0 first)
+5. **Draws (Forced vs Voluntary)** — grouped bars comparing forced and voluntary draws per seat
+6. **Play Efficiency** — cards played vs draws per game per seat
+
+Results JSON is saved to `simulator/data/tier_results.json`.
 
 ### Step 4: Run Baseline (Verify Engine)
 

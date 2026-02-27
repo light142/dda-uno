@@ -6,6 +6,16 @@ import csv
 # Draw action ID in RLCard UNO
 DRAW_ACTION_ID = 60
 
+# Action card IDs that affect the next player (skip their turn / force draws)
+# Action IDs use 15-card color groups: action_id % 15 gives card type offset
+SKIP_IDS = {10, 25, 40, 55}
+REVERSE_IDS = {11, 26, 41, 56}
+DRAW2_IDS = {12, 27, 42, 57}
+WILD_IDS = {13, 28, 43, 58}
+WILD_DRAW4_IDS = {14, 29, 44, 59}
+OFFENSIVE_ACTION_IDS = SKIP_IDS | DRAW2_IDS | WILD_DRAW4_IDS
+ALL_SPECIAL_IDS = SKIP_IDS | REVERSE_IDS | DRAW2_IDS | WILD_IDS | WILD_DRAW4_IDS
+
 
 class TrainingLogger:
     """Logs training metrics to CSV and optionally generates plots."""
@@ -166,6 +176,72 @@ def count_voluntary_draws(trajectories, seat):
     return count
 
 
+def reorganize_with_shaping(trajectories, seat, base_reward, target_seat,
+                            vd_penalty=0.0, target_hit_penalty=0.0,
+                            opponent_hit_bonus=0.0):
+    """Reorganize trajectory with per-step reward shaping.
+
+    Supports voluntary draw penalties and action card shaping. The base
+    game outcome reward is applied to the terminal step only. Intermediate
+    steps get shaped rewards based on the action taken.
+
+    Args:
+        trajectories: Raw per-seat trajectory lists from run_game().
+        seat: Seat index to extract transitions for.
+        base_reward: Game outcome reward for the terminal step.
+        target_seat: The seat this agent should help (e.g. PLAYER_SEAT=0).
+        vd_penalty: Per-step penalty for voluntary draws (0.0 to disable).
+        target_hit_penalty: Penalty for playing offensive cards on target.
+        opponent_hit_bonus: Bonus for playing offensive cards on opponents.
+
+    Returns:
+        List of [state, action, reward, next_state, done] transitions.
+    """
+    traj = trajectories[seat]
+    transitions = []
+
+    for i in range(0, len(traj) - 2, 2):
+        state = traj[i]
+        action = traj[i + 1]
+        next_state = traj[i + 2]
+        is_terminal = (i + 2 >= len(traj) - 1)
+
+        if is_terminal:
+            reward = base_reward
+        elif action == DRAW_ACTION_ID and len(state['legal_actions']) > 1:
+            reward = vd_penalty
+        elif action in OFFENSIVE_ACTION_IDS:
+            next_player = int(state['obs'][6, :, 0].argmax())
+            if next_player == target_seat:
+                reward = target_hit_penalty
+            else:
+                reward = opponent_hit_bonus
+        else:
+            reward = 0.0
+
+        transitions.append([state, action, reward, next_state, is_terminal])
+
+    return transitions
+
+
+def patch_dqn_loss_tracking(rl_agent):
+    """Monkey-patch DQN agent to store loss after each training step.
+
+    RLCard's DQNAgent computes loss in train() but only prints it —
+    never stores it on the object. This patches q_estimator.update()
+    to capture the return value. Call once after creating the RLAgent.
+    """
+    dqn = rl_agent.agent
+    original_update = dqn.q_estimator.update
+
+    def update_with_tracking(*args, **kwargs):
+        loss = original_update(*args, **kwargs)
+        dqn._last_loss = loss
+        return loss
+
+    dqn.q_estimator.update = update_with_tracking
+
+
 def get_dqn_metrics(rl_agent):
     """Extract current metrics from a DQN agent.
 
@@ -184,10 +260,8 @@ def get_dqn_metrics(rl_agent):
     else:
         epsilon = dqn.epsilons[-1]
 
-    # Current loss (from last training step)
+    # Current loss (from patched train method)
     loss = getattr(dqn, '_last_loss', None)
-    if loss is None and hasattr(dqn, 'loss'):
-        loss = dqn.loss
 
     # Buffer size — RLCard Memory stores data in .memory (a list)
     if hasattr(dqn.memory, 'memory') and isinstance(dqn.memory.memory, list):

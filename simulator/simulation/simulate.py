@@ -23,6 +23,9 @@ Usage:
 
     # Baseline sanity check
     python -m simulator.simulation.simulate --baseline --games 100
+
+    # Fast run without stats/plots
+    python -m simulator.simulation.simulate --s0 rule-v1 --s1 selfish --s2 selfish --s3 selfish --no-stats
 """
 
 import argparse
@@ -31,6 +34,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -41,6 +45,47 @@ from simulator.config.tiers import (
     VOLUNTARY_DRAW_POLICY, TierModelPool, resolve_agent_name,
 )
 from simulator.config.simulation import TIER_GAMES, TIER_RESULTS_PATH, DATA_DIR
+from simulator.simulation.game_stats import GameStatCollector, print_stats_summary, plot_stats
+
+
+# Short names for plot filenames
+SHORT_NAMES = {
+    "random": "rnd",
+    "random-vd": "rndvd",
+    "rule-v1": "rv1",
+    "noob": "noob",
+    "casual": "cas",
+    "pro": "pro",
+    "selfish": "sel",
+    "adversarial": "adv",
+    "altruistic": "alt",
+    "hyper_altruistic": "halt",
+    "hyper_adversarial": "hadv",
+}
+
+
+def _short(name):
+    """Get short form of an agent name for filenames."""
+    return SHORT_NAMES.get(name, name[:4])
+
+
+def _build_plot_path(seats, games, data_dir):
+    """Build a descriptive plot filename from seat agents.
+
+    Format: sim_{s0}_{s1}_{s2}_{s3}_{games}g_stats.png
+    """
+    parts = [_short(s) for s in seats]
+    return os.path.join(data_dir, f"sim_{'_'.join(parts)}_{games}g_stats.png")
+
+
+def _safe_save_path(path):
+    """If path already exists, rename the old file with a timestamp suffix."""
+    if os.path.exists(path):
+        ts = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y%m%d_%H%M%S")
+        base, ext = os.path.splitext(path)
+        old_path = f"{base}_{ts}{ext}"
+        os.rename(path, old_path)
+        print(f"  Renamed old plot -> {os.path.basename(old_path)}")
 
 
 def needs_cli_target(agents: list) -> bool:
@@ -74,7 +119,8 @@ def get_draw_caps(seats):
     return {i: VOLUNTARY_DRAW_POLICY.get(seats[i], 0) for i in range(len(seats))}
 
 
-def run_combo(game, pool, seats, cli_target, num_games, show_progress=False):
+def run_combo(game, pool, seats, cli_target, num_games, show_progress=False,
+              collect_stats=False):
     """Run num_games with a specific agent assignment and return results.
 
     Args:
@@ -84,9 +130,10 @@ def run_combo(game, pool, seats, cli_target, num_games, show_progress=False):
         cli_target: CLI --target value for cooperative agents, or None.
         num_games: Number of games to play.
         show_progress: Print progress every 500 games.
+        collect_stats: Collect rich per-game statistics.
 
     Returns:
-        dict with per-seat win counts and win rates.
+        dict with per-seat win counts, win rates, and optional stats.
     """
     agents = [pool.get(seats[i]) for i in range(NUM_PLAYERS)]
     game.set_agents(agents)
@@ -98,11 +145,17 @@ def run_combo(game, pool, seats, cli_target, num_games, show_progress=False):
     game.set_max_voluntary_draws(get_draw_caps(seats))
 
     wins = {i: 0 for i in range(NUM_PLAYERS)}
+    collector = GameStatCollector(NUM_PLAYERS, seats) if collect_stats else None
+
     eval_every = 500
     for g in range(num_games):
         result = game.run_game(is_training=False)
         winner = result['winner']
         wins[winner] += 1
+
+        if collector is not None:
+            collector.record(result['trajectories'], winner)
+
         if show_progress:
             done = g + 1
             s0_wr = wins[PLAYER_SEAT] / done
@@ -128,7 +181,12 @@ def run_combo(game, pool, seats, cli_target, num_games, show_progress=False):
         print()  # final newline after last \r line
 
     win_rates = {i: wins[i] / num_games for i in range(NUM_PLAYERS)}
-    return {'wins': wins, 'win_rates': win_rates, 'games': num_games}
+    out = {'wins': wins, 'win_rates': win_rates, 'games': num_games}
+
+    if collector is not None:
+        out['stats'] = collector.summary()
+
+    return out
 
 
 def run_single(args):
@@ -165,7 +223,10 @@ def run_single(args):
 
     game = UnoGame()
     print("Running games...")
-    result = run_combo(game, pool, seats, target_seat, args.games, show_progress=True)
+    result = run_combo(
+        game, pool, seats, target_seat, args.games,
+        show_progress=True, collect_stats=not args.no_stats,
+    )
 
     # Print results
     print("=" * 60)
@@ -178,6 +239,13 @@ def run_single(args):
         print(f"  Seat {i} ({label:>16}) : {w:>4}/{args.games}  ({wr:.1%})")
     print("=" * 60)
 
+    # Print rich stats and generate plot
+    if 'stats' in result:
+        print_stats_summary(result['stats'], seats)
+        plot_path = _build_plot_path(seats, args.games, DATA_DIR)
+        _safe_save_path(plot_path)
+        plot_stats(result['stats'], seats, plot_path)
+
     # Build output
     output = {
         'mode': 'single',
@@ -187,6 +255,9 @@ def run_single(args):
         'wins': result['wins'],
         'win_rates': {f's{k}': round(v, 4) for k, v in result['win_rates'].items()},
     }
+    if 'stats' in result:
+        # Strip internal keys (prefixed with _) before serialization
+        output['stats'] = {k: v for k, v in result['stats'].items() if not k.startswith('_')}
     return output
 
 
@@ -232,10 +303,13 @@ def run_all_combos(args):
     for i, combo in enumerate(combos, 1):
         seats = [seat0, combo[0], combo[1], combo[2]]
 
-        result = run_combo(game, pool, seats, target_seat, args.games)
+        result = run_combo(
+            game, pool, seats, target_seat, args.games,
+            collect_stats=args.stats,
+        )
 
         key = f"{combo[0]},{combo[1]},{combo[2]}"
-        results[key] = {
+        combo_result = {
             'seat1': combo[0],
             'seat2': combo[1],
             'seat3': combo[2],
@@ -243,6 +317,9 @@ def run_all_combos(args):
             'per_seat_wins': result['wins'],
             'games': args.games,
         }
+        if 'stats' in result:
+            combo_result['stats'] = {k: v for k, v in result['stats'].items() if not k.startswith('_')}
+        results[key] = combo_result
 
         elapsed = time.time() - start_time
         eta = elapsed / i * (total - i)
@@ -326,6 +403,14 @@ def main():
     parser.add_argument(
         '--output', type=str, default=TIER_RESULTS_PATH,
         help=f'Output JSON path (default: {TIER_RESULTS_PATH})',
+    )
+    parser.add_argument(
+        '--stats', action='store_true', default=False,
+        help='Collect rich per-game statistics (opt-in for --all mode)',
+    )
+    parser.add_argument(
+        '--no-stats', action='store_true', default=False,
+        help='Disable stats collection for single combo mode (faster)',
     )
 
     args = parser.parse_args()

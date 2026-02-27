@@ -7,6 +7,9 @@ Random seat assignment: the DQN agent can sit at any seat (0-3),
 with varied opponents filling the remaining seats. This teaches
 the agent to win from any position.
 
+Curriculum opponent scheduling: weak opponents first, then medium, then full pool.
+Self-play with own checkpoints enabled after 40% of training.
+
 Supports resume, --fresh, and --test flags.
 
 Usage:
@@ -29,8 +32,6 @@ from engine.config.game import NUM_PLAYERS, NUM_ACTIONS
 from simulator.config.training import (
     NUM_EPISODES, EVAL_EVERY, EVAL_NUM_GAMES,
     MODEL_DIR, SAVE_EVERY, OPPONENT_POOL,
-    SELFISH_SEAT_WEIGHTS, SELFISH_CHECKPOINT_START,
-    REPLAY_MEMORY_SIZE,
 )
 from simulator.config.tiers import VOLUNTARY_DRAW_POLICY
 from simulator.training.opponents import (
@@ -38,10 +39,45 @@ from simulator.training.opponents import (
 )
 from simulator.training.metrics import (
     TrainingLogger, count_voluntary_draws, get_dqn_metrics,
-    print_eval_header, print_eval_metrics,
+    print_eval_header, print_eval_metrics, patch_dqn_loss_tracking,
 )
 
 SELFISH_DIR = os.path.join(MODEL_DIR, "selfish")
+
+# DQN hyperparameters (selfish-specific overrides)
+SELFISH_MLP_LAYERS = [512, 512]
+SELFISH_REPLAY_SIZE = 500_000
+SELFISH_BATCH_SIZE = 64
+
+# Seat weights: favor fewer DQN agents for clearer learning signal
+SELFISH_SEAT_WEIGHTS = {1: 20, 2: 30, 3: 35, 4: 15}
+
+# Curriculum opponent scheduling (progress threshold, opponent list)
+CURRICULUM = [
+    (0.00, ["random", "noob"]),
+    (0.25, ["random", "noob", "rule-v1", "casual"]),
+    (0.50, ["random", "rule-v1", "noob", "casual", "pro"]),
+]
+
+# Self-play: load own checkpoints as opponents
+SELF_PLAY_START = 0.40
+SELF_PLAY_REFRESH_PCT = 0.05
+
+
+def get_curriculum_pool(progress):
+    """Return the opponent list for the current training progress.
+
+    Args:
+        progress: Current episode / total episodes (0.0 to 1.0).
+
+    Returns:
+        List of opponent names for this phase.
+    """
+    pool_names = CURRICULUM[0][1]
+    for threshold, names in CURRICULUM:
+        if progress >= threshold:
+            pool_names = names
+    return pool_names
 
 
 def pick_seat_config(pool, selfish_entry, seat_weights):
@@ -73,7 +109,7 @@ def pick_seat_config(pool, selfish_entry, seat_weights):
 
     for seat in all_seats:
         if seat in dqn_seats:
-            vd_caps[seat] = VOLUNTARY_DRAW_POLICY.get("selfish", 5)
+            vd_caps[seat] = VOLUNTARY_DRAW_POLICY.get("selfish", 0)
         else:
             name, agent, vd_cap = pick_opponent(pool, selfish_entry)
             agents_map[seat] = agent
@@ -82,29 +118,25 @@ def pick_seat_config(pool, selfish_entry, seat_weights):
     return dqn_seats, agents_map, vd_caps
 
 
-def evaluate(game, rl_agent, num_games):
-    """Evaluate with fixed config: seat 0 = rule-v1, seats 1-3 = DQN."""
-    from rlcard.models import load as load_model
-    eval_opponent = load_model('uno-rule-v1').agents[0]
-
-    agents = [None] * NUM_PLAYERS
-    agents[0] = eval_opponent
-    for seat in [1, 2, 3]:
-        agents[seat] = rl_agent.agent
-    game.set_agents(agents)
-
-    eval_vd = {0: 0, 1: 5, 2: 5, 3: 5}
-    game.set_max_voluntary_draws(eval_vd)
-
+def evaluate(game, rl_agent, pool, num_games):
+    """Evaluate with mixed opponents at seat 0, DQN at seats 1-3."""
     wins = {i: 0 for i in range(NUM_PLAYERS)}
     total_game_length = 0
     total_vd = {i: 0 for i in range(NUM_PLAYERS)}
 
     for _ in range(num_games):
+        name, seat0_agent, seat0_vd = pick_opponent(pool)
+
+        agents = [None] * NUM_PLAYERS
+        agents[0] = seat0_agent
+        for seat in [1, 2, 3]:
+            agents[seat] = rl_agent.agent
+        game.set_agents(agents)
+        game.set_max_voluntary_draws({0: seat0_vd, 1: 0, 2: 0, 3: 0})
+
         result = game.run_game(is_training=False)
         wins[result['winner']] += 1
 
-        # Count game length (turns for all players)
         game_len = sum(
             len(result['trajectories'][s]) // 2
             for s in range(NUM_PLAYERS)
@@ -163,8 +195,13 @@ def train(fresh=False, test=False):
     print("=" * 60)
     print(f"  Seat assignment : random (DQN at any seat)")
     print(f"  DQN seat weights: {SELFISH_SEAT_WEIGHTS}")
-    print(f"  Opponent pool   : {OPPONENT_POOL}")
-    print(f"  Network         : [256, 256]")
+    print(f"  Curriculum      : {len(CURRICULUM)} phases")
+    for thresh, names in CURRICULUM:
+        print(f"    {thresh:.0%}: {names}")
+    print(f"  Self-play       : after {SELF_PLAY_START:.0%} of training")
+    print(f"  Network         : {SELFISH_MLP_LAYERS}")
+    print(f"  Replay buffer   : {SELFISH_REPLAY_SIZE:,}")
+    print(f"  Batch size      : {SELFISH_BATCH_SIZE}")
     print(f"  Episodes        : {start_episode:,} -> {num_episodes:,}")
     if test:
         print(f"  Mode            : SMOKE TEST")
@@ -187,19 +224,45 @@ def train(fresh=False, test=False):
     if checkpoint_path:
         rl_agent = RLAgent(model_path=checkpoint_path)
     else:
-        rl_agent = RLAgent()
+        rl_agent = RLAgent(
+            mlp_layers=SELFISH_MLP_LAYERS,
+            replay_memory_size=SELFISH_REPLAY_SIZE,
+            batch_size=SELFISH_BATCH_SIZE,
+        )
+    patch_dqn_loss_tracking(rl_agent)
 
-    # Create opponent pool
-    pool = create_opponent_pool(OPPONENT_POOL)
+    # Create opponent pools (curriculum starts with phase 1, eval always uses full pool)
+    current_pool_names = get_curriculum_pool(start_episode / num_episodes)
+    pool = create_opponent_pool(current_pool_names)
+    eval_pool = create_opponent_pool(OPPONENT_POOL)
 
     # Metrics logger
     logger = TrainingLogger(MODEL_DIR, "selfish")
 
-    # Training loop
+    # Self-play state
     selfish_entry = None
-    selfish_check_episode = int(num_episodes * SELFISH_CHECKPOINT_START)
+    self_play_start = int(num_episodes * SELF_PLAY_START)
+    self_play_refresh = max(1, int(num_episodes * SELF_PLAY_REFRESH_PCT))
 
     for episode in range(start_episode, num_episodes + 1):
+        # Curriculum: check if opponent pool should change
+        progress = episode / num_episodes
+        new_pool_names = get_curriculum_pool(progress)
+        if new_pool_names != current_pool_names:
+            current_pool_names = new_pool_names
+            pool = create_opponent_pool(current_pool_names)
+            print(f"  + Curriculum phase: {current_pool_names}")
+
+        # Self-play: load own checkpoints after threshold
+        if episode >= self_play_start and episode % self_play_refresh == 0:
+            new_entry = try_load_selfish_checkpoint(MODEL_DIR)
+            if new_entry:
+                if selfish_entry is None:
+                    print(f"  + Self-play enabled: selfish checkpoint loaded")
+                else:
+                    print(f"  + Self-play checkpoint refreshed")
+                selfish_entry = new_entry
+
         # Pick seat configuration
         dqn_seats, agents_map, vd_caps = pick_seat_config(
             pool, selfish_entry, SELFISH_SEAT_WEIGHTS
@@ -228,10 +291,10 @@ def train(fresh=False, test=False):
             for transition in all_transitions[seat]:
                 rl_agent.feed(transition)
 
-        # Periodic evaluation
+        # Periodic evaluation (always uses full opponent pool)
         if episode % eval_every == 0:
             wins, avg_game_length, vd_per_seat = evaluate(
-                game, rl_agent, eval_num_games
+                game, rl_agent, eval_pool, eval_num_games
             )
             loss, epsilon, buffer_size = get_dqn_metrics(rl_agent)
 
@@ -239,7 +302,7 @@ def train(fresh=False, test=False):
             print_eval_metrics(
                 wins, eval_num_games, loss, epsilon,
                 avg_game_length, vd_per_seat,
-                buffer_size, REPLAY_MEMORY_SIZE,
+                buffer_size, SELFISH_REPLAY_SIZE,
                 bots_label="selfish",
             )
 

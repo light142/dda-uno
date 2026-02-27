@@ -125,6 +125,7 @@ def encode_game_state(
     deck_remaining: int = 50,
     action_log: list = None,
     target_seat: int = None,
+    allow_voluntary_draw: bool = True,
 ) -> dict:
     """Build RLCard-compatible enriched state dict for querying trained agents.
 
@@ -141,6 +142,8 @@ def encode_game_state(
         deck_remaining: Cards remaining in draw pile.
         action_log: List of (player_id, action_str) tuples from session.
         target_seat: Which seat this agent should help win (None = no target).
+        allow_voluntary_draw: If True, draw (action 60) is always legal.
+            If False, draw is only legal when no playable cards exist.
     """
     from engine.config.game import STATE_SHAPE, NUM_PLAYERS
     obs = np.zeros(STATE_SHAPE, dtype=int)
@@ -256,10 +259,10 @@ def encode_game_state(
     if target_seat is not None:
         obs[11, target_seat % 4, :] = 1
 
-    # Legal actions (voluntary draw always available — realistic UNO rules)
+    # Legal actions
     legal = get_legal_action_ids(hand, top_card, active_color)
-    if 60 not in legal:
-        legal[60] = None
+    if allow_voluntary_draw and 60 not in legal:
+        legal[60] = None  # Voluntary draw available (human player / VD-enabled bots)
 
     return {
         "obs": obs,

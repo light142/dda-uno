@@ -44,8 +44,8 @@ MIXABLE_TIERS = ["selfish", "adversarial", "random", "altruistic", "hyper_altrui
 # Max voluntary draws per agent type (matches training policy)
 # 0 = draw disabled, N = capped at N per game
 VOLUNTARY_DRAW_POLICY = {
-    "selfish": 5,           # trained with cap 5
-    "adversarial": 5,       # trained with cap 5
+    "selfish": 0,           # trained with draw disabled (play cards to win)
+    "adversarial": 0,       # trained with draw disabled (play cards aggressively)
     "hyper_altruistic": 5,  # trained with cap 5
     "altruistic": 0,        # trained with draw disabled
     "hyper_adversarial": 0, # support role, draw disabled

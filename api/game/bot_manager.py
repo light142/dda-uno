@@ -62,6 +62,8 @@ class BotManager:
         Returns (card_to_play, chosen_color) or (None, None) for draw.
         """
         # Build RLCard-compatible enriched state
+        # Default: bots don't get voluntary draw unless caller explicitly enables it
+        context.setdefault('allow_voluntary_draw', False)
         state = encode_game_state(hand, top_card, active_color, **context)
 
         # Query agent

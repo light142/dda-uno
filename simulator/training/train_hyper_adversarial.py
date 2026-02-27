@@ -38,7 +38,8 @@ from simulator.config.tiers import VOLUNTARY_DRAW_POLICY
 from simulator.training.opponents import create_opponent_pool, pick_opponent
 from simulator.training.metrics import (
     TrainingLogger, count_voluntary_draws, get_dqn_metrics,
-    print_eval_header, print_eval_metrics,
+    print_eval_header, print_eval_metrics, patch_dqn_loss_tracking,
+    reorganize_with_shaping,
 )
 
 HYPER_ADVERSARIAL_DIR = os.path.join(MODEL_DIR, "hyper_adversarial")
@@ -47,6 +48,12 @@ HYPER_ADVERSARIAL_DIR = os.path.join(MODEL_DIR, "hyper_adversarial")
 TARGET_WIN_REWARD = 2.0     # Star seat wins — mission accomplished
 BOT_WIN_REWARD = 1.0        # Another bot wins — team still beat seat 0
 SEAT0_WIN_PENALTY = -2.0    # Seat 0 wins — catastrophic
+
+# Per-step reward shaping (for support seats)
+TARGET_HIT_PENALTY = -1.0   # strong penalty for skip/draw-2/wild+4 on star seat
+OPPONENT_HIT_BONUS = 0.5    # bonus for skip/draw-2/wild+4 on seat 0 or others
+PASS_PENALTY = -0.5         # per-step penalty for voluntary draws (strategic passing)
+SUPPORT_VD_CAP = 5          # voluntary draw cap for support bots
 
 # Opponent weights for seat 0 (bias toward strong)
 OPPONENT_WEIGHTS = {
@@ -82,32 +89,40 @@ def pick_weighted_opponent(pool):
     return random.choices(pool, weights=weights, k=1)[0]
 
 
-def evaluate(game, selfish_agent, coop_agent, num_games):
-    """Evaluate with rule-v1 at seat 0, selfish at seat 2 (star), coop at 1 and 3."""
-    from rlcard.models import load as load_model
-    eval_opponent = load_model('uno-rule-v1').agents[0]
-
-    target_seat = 2  # Fixed star seat for eval consistency
-    agents = [None] * NUM_PLAYERS
-    agents[0] = eval_opponent
-    agents[target_seat] = selfish_agent
-    for seat in BOT_SEATS:
-        if seat != target_seat:
-            agents[seat] = coop_agent.agent
-
-    game.set_agents(agents)
-    game.set_max_voluntary_draws({0: 0, target_seat: 5, **{
-        s: 0 for s in BOT_SEATS if s != target_seat
-    }})
-    game.set_target_seat(target_seat)
-
-    wins = {i: 0 for i in range(NUM_PLAYERS)}
+def evaluate(game, selfish_agent, coop_agent, pool, num_games):
+    """Evaluate with mixed opponents at seat 0, random star seat among 1-3."""
+    role_wins = {"seat0": 0, "star": 0, "support": 0}
     total_game_length = 0
     total_vd = {i: 0 for i in range(NUM_PLAYERS)}
 
     for _ in range(num_games):
+        star_seat = random.choice(BOT_SEATS)
+        support_seats = [s for s in BOT_SEATS if s != star_seat]
+
+        name, seat0_agent, seat0_vd = pick_weighted_opponent(pool)
+
+        agents = [None] * NUM_PLAYERS
+        agents[0] = seat0_agent
+        agents[star_seat] = selfish_agent
+        for seat in support_seats:
+            agents[seat] = coop_agent.agent
+
+        game.set_agents(agents)
+        vd_caps = {0: seat0_vd, star_seat: 0}
+        for seat in support_seats:
+            vd_caps[seat] = SUPPORT_VD_CAP
+        game.set_max_voluntary_draws(vd_caps)
+        game.set_target_seat(star_seat)
+
         result = game.run_game(is_training=False)
-        wins[result['winner']] += 1
+        winner = result['winner']
+
+        if winner == 0:
+            role_wins["seat0"] += 1
+        elif winner == star_seat:
+            role_wins["star"] += 1
+        else:
+            role_wins["support"] += 1
 
         game_len = sum(
             len(result['trajectories'][s]) // 2
@@ -121,7 +136,7 @@ def evaluate(game, selfish_agent, coop_agent, num_games):
     avg_game_length = total_game_length / num_games
     vd_per_seat = {s: total_vd[s] / num_games for s in range(NUM_PLAYERS)}
 
-    return wins, avg_game_length, vd_per_seat
+    return role_wins, avg_game_length, vd_per_seat
 
 
 def find_latest_checkpoint(checkpoint_dir):
@@ -185,6 +200,8 @@ def train(fresh=False, test=False):
     print("=" * 60)
     print(f"  Star agent      : frozen selfish_agent.pt")
     print(f"  Support reward  : +{TARGET_WIN_REWARD} star, +{BOT_WIN_REWARD} bot, {SEAT0_WIN_PENALTY} seat0")
+    print(f"  Action shaping  : {TARGET_HIT_PENALTY} hit star, +{OPPONENT_HIT_BONUS} hit opponent")
+    print(f"  Voluntary draw  : ENABLED for support (cap={SUPPORT_VD_CAP}, penalty={PASS_PENALTY}/step)")
     print(f"  Opponent pool   : {OPPONENT_POOL} (weighted strong)")
     print(f"  Network         : [256, 256]")
     print(f"  Episodes        : {start_episode:,} -> {num_episodes:,}")
@@ -209,6 +226,7 @@ def train(fresh=False, test=False):
         coop_agent = RLAgent(model_path=checkpoint_path)
     else:
         coop_agent = RLAgent()
+    patch_dqn_loss_tracking(coop_agent)
 
     pool = create_opponent_pool(OPPONENT_POOL)
     logger = TrainingLogger(MODEL_DIR, "hyper_adversarial")
@@ -230,10 +248,10 @@ def train(fresh=False, test=False):
 
         game.set_agents(agents)
 
-        # VD caps: star gets 5 (selfish), support gets 0, seat 0 per type
-        vd_caps = {0: seat0_vd, star_seat: 5}
+        # VD caps: star gets 0 (selfish trained without VD), support gets strategic VD
+        vd_caps = {0: seat0_vd, star_seat: 0}
         for seat in support_seats:
-            vd_caps[seat] = 0
+            vd_caps[seat] = SUPPORT_VD_CAP
         game.set_max_voluntary_draws(vd_caps)
 
         # Set target seat for cooperative plane 11
@@ -241,33 +259,33 @@ def train(fresh=False, test=False):
 
         result = game.run_game(is_training=True)
 
-        # Feed cooperative reward ONLY to support seats
+        # Feed cooperative reward with per-step shaping (VD + action cards)
         for seat in support_seats:
-            transitions = game.get_training_data_custom_reward(
-                result['trajectories'],
-                result['payoffs'],
-                seat=seat,
-                reward_fn=lambda payoffs, s, _ts=star_seat: cooperative_reward(
-                    payoffs, s, _ts
-                ),
+            base_reward = cooperative_reward(result['payoffs'], seat, star_seat)
+            transitions = reorganize_with_shaping(
+                result['trajectories'], seat, base_reward,
+                target_seat=star_seat,
+                vd_penalty=PASS_PENALTY,
+                target_hit_penalty=TARGET_HIT_PENALTY,
+                opponent_hit_bonus=OPPONENT_HIT_BONUS,
             )
             for transition in transitions:
                 coop_agent.feed(transition)
 
         if episode % eval_every == 0:
             wins, avg_game_length, vd_per_seat = evaluate(
-                game, selfish_agent_obj, coop_agent, eval_num_games
+                game, selfish_agent_obj, coop_agent, pool, eval_num_games
             )
             loss, epsilon, buffer_size = get_dqn_metrics(coop_agent)
 
             print_eval_header(episode, num_episodes)
-            # Custom display: show star vs opponent
-            seat0_wins = wins.get(0, 0)
-            star_wins = wins.get(2, 0)  # eval uses fixed star=2
-            support_wins = sum(wins.get(s, 0) for s in [1, 3])
+            # Custom display: show role-based wins
+            seat0_wins = wins["seat0"]
+            star_wins = wins["star"]
+            support_wins = wins["support"]
             print(f"  \u2502  Seat 0 (opponent)   : {seat0_wins:>3}/{eval_num_games}  ({seat0_wins/eval_num_games:.1%})")
-            print(f"  \u2502  Star (selfish, s2)  : {star_wins:>3}/{eval_num_games}  ({star_wins/eval_num_games:.1%})")
-            print(f"  \u2502  Support (s1+s3)     : {support_wins:>3}/{eval_num_games}  ({support_wins/eval_num_games:.1%})")
+            print(f"  \u2502  Star (selfish)      : {star_wins:>3}/{eval_num_games}  ({star_wins/eval_num_games:.1%})")
+            print(f"  \u2502  Support (coop)      : {support_wins:>3}/{eval_num_games}  ({support_wins/eval_num_games:.1%})")
             if loss is not None:
                 print(f"  \u2502  Loss                : {loss:.6f}")
             print(f"  \u2502  Epsilon             : {epsilon:.4f}")
@@ -277,8 +295,10 @@ def train(fresh=False, test=False):
             print(f"  \u2502  Buffer              : {buffer_size:,} / {REPLAY_MEMORY_SIZE:,}")
             print(f"  \u2514{'\u2500' * 50}")
 
+            # Convert role wins to seat-style dict for logger (0=opponent, 1=bots)
             logger.log_eval(
-                episode, wins, eval_num_games, loss, epsilon,
+                episode, {0: seat0_wins, 1: star_wins + support_wins},
+                eval_num_games, loss, epsilon,
                 avg_game_length, vd_per_seat, buffer_size,
             )
 

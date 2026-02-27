@@ -93,7 +93,7 @@ def try_load_selfish_checkpoint(model_dir):
 
         from engine.game_logic.agents import RLAgent
         rl = RLAgent(model_path=path)
-        vd_cap = VOLUNTARY_DRAW_POLICY.get("selfish", 5)
+        vd_cap = VOLUNTARY_DRAW_POLICY.get("selfish", 0)
         return (rl.agent, vd_cap)
 
     except Exception as e:

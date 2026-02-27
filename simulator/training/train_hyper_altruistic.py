@@ -4,7 +4,8 @@ Unlike regular altruistic, this agent can DRAW (pass) even with playable cards.
 It learns WHEN passing is worth the penalty cost.
 
 Reward: +2 when seat 0 wins, -1 when the agent itself wins,
--1 when another bot wins, MINUS 0.5 per voluntary draw (cumulative).
+-1 when another bot wins. Per-step penalty of -0.5 on each voluntary draw.
+Per-step shaping: -0.5 for action cards targeting seat 0, +0.5 for opponents.
 
 Opponent pool with equal weights, includes random-vd.
 After 20% of training, includes selfish checkpoints as opponents.
@@ -38,7 +39,8 @@ from simulator.training.opponents import (
 )
 from simulator.training.metrics import (
     TrainingLogger, count_voluntary_draws, get_dqn_metrics,
-    print_eval_header, print_eval_metrics,
+    print_eval_header, print_eval_metrics, patch_dqn_loss_tracking,
+    reorganize_with_shaping,
 )
 
 HYPER_ALTRUISTIC_DIR = os.path.join(MODEL_DIR, "hyper_altruistic")
@@ -49,32 +51,25 @@ SELF_WIN_PENALTY = -1.0
 OTHER_WIN_PENALTY = -1.0
 PASS_PENALTY = -0.5
 
+# Per-step action card reward shaping
+TARGET_HIT_PENALTY = -0.5   # penalty for skip/draw-2/wild+4 on seat 0
+OPPONENT_HIT_BONUS = 0.5    # bonus for skip/draw-2/wild+4 on other bots
 
-def hyper_altruistic_reward(payoffs, seat, voluntary_draws):
-    """Custom reward with pass penalty."""
+
+def hyper_altruistic_reward(payoffs, seat):
+    """Base game outcome reward (shaping applied per-step instead)."""
     winner = max(range(len(payoffs)), key=lambda i: payoffs[i])
 
     if winner == PLAYER_SEAT:
-        base = WIN_BONUS
+        return WIN_BONUS
     elif winner == seat:
-        base = SELF_WIN_PENALTY
+        return SELF_WIN_PENALTY
     else:
-        base = OTHER_WIN_PENALTY
-
-    return base + voluntary_draws * PASS_PENALTY
+        return OTHER_WIN_PENALTY
 
 
-def evaluate(game, rl_agent, num_games):
-    """Evaluate with rule-v1 at seat 0."""
-    from rlcard.models import load as load_model
-    eval_opponent = load_model('uno-rule-v1').agents[0]
-
-    agents = [None] * NUM_PLAYERS
-    agents[0] = eval_opponent
-    for seat in BOT_SEATS:
-        agents[seat] = rl_agent.agent
-    game.set_agents(agents)
-    game.set_max_voluntary_draws({0: 0, 1: 5, 2: 5, 3: 5})
+def evaluate(game, rl_agent, pool, num_games):
+    """Evaluate with mixed opponents at seat 0, DQN at seats 1-3."""
     game.set_target_seat(PLAYER_SEAT)
 
     wins = {i: 0 for i in range(NUM_PLAYERS)}
@@ -82,6 +77,15 @@ def evaluate(game, rl_agent, num_games):
     total_vd = {i: 0 for i in range(NUM_PLAYERS)}
 
     for _ in range(num_games):
+        name, seat0_agent, seat0_vd = pick_opponent(pool)
+
+        agents = [None] * NUM_PLAYERS
+        agents[0] = seat0_agent
+        for seat in BOT_SEATS:
+            agents[seat] = rl_agent.agent
+        game.set_agents(agents)
+        game.set_max_voluntary_draws({0: seat0_vd, 1: 5, 2: 5, 3: 5})
+
         result = game.run_game(is_training=False)
         wins[result['winner']] += 1
 
@@ -145,7 +149,8 @@ def train(fresh=False, test=False):
     print(f"  Target          : seat 0 (human player)")
     print(f"  Opponent pool   : {ALTRUISTIC_POOL} (equal weights)")
     print(f"  Voluntary draw  : ENABLED (bots learn strategic passing)")
-    print(f"  Reward          : +{WIN_BONUS} win, {PASS_PENALTY} per pass")
+    print(f"  Reward          : +{WIN_BONUS} win, {PASS_PENALTY}/step per pass")
+    print(f"  Action shaping  : {TARGET_HIT_PENALTY} hit target, +{OPPONENT_HIT_BONUS} hit opponent")
     print(f"  Network         : [256, 256]")
     print(f"  Episodes        : {start_episode:,} -> {num_episodes:,}")
     if test:
@@ -168,6 +173,7 @@ def train(fresh=False, test=False):
         rl_agent = RLAgent(model_path=checkpoint_path)
     else:
         rl_agent = RLAgent()
+    patch_dqn_loss_tracking(rl_agent)
 
     pool = create_opponent_pool(ALTRUISTIC_POOL)
     logger = TrainingLogger(MODEL_DIR, "hyper_altruistic")
@@ -175,14 +181,19 @@ def train(fresh=False, test=False):
     game.set_target_seat(PLAYER_SEAT)
 
     selfish_entry = None
-    selfish_check_episode = int(num_episodes * SELFISH_CHECKPOINT_START)
+    selfish_start = int(num_episodes * SELFISH_CHECKPOINT_START)
+    selfish_refresh = max(1, int(num_episodes * 0.05))  # refresh every 5%
 
     for episode in range(start_episode, num_episodes + 1):
-        # Try loading selfish checkpoint after 20%
-        if episode == selfish_check_episode:
-            selfish_entry = try_load_selfish_checkpoint(MODEL_DIR)
-            if selfish_entry:
-                print(f"  + Selfish checkpoint loaded as opponent")
+        # Try loading latest selfish checkpoint (starts at 20%, refreshes every 5%)
+        if episode >= selfish_start and episode % selfish_refresh == 0:
+            new_entry = try_load_selfish_checkpoint(MODEL_DIR)
+            if new_entry:
+                if selfish_entry is None:
+                    print(f"  + Selfish checkpoint loaded as opponent")
+                else:
+                    print(f"  + Selfish checkpoint refreshed")
+                selfish_entry = new_entry
 
         # Pick opponent
         name, seat0_agent, seat0_vd = pick_opponent(pool, selfish_entry)
@@ -197,23 +208,22 @@ def train(fresh=False, test=False):
 
         result = game.run_game(is_training=True)
 
-        # Feed with hyper altruistic reward (includes pass penalty)
+        # Feed with per-step shaping (VD penalty + action card shaping)
         for seat in BOT_SEATS:
-            vd = count_voluntary_draws(result['trajectories'], seat)
-            transitions = game.get_training_data_custom_reward(
-                result['trajectories'],
-                result['payoffs'],
-                seat=seat,
-                reward_fn=lambda payoffs, s, _vd=vd: hyper_altruistic_reward(
-                    payoffs, s, _vd
-                ),
+            base_reward = hyper_altruistic_reward(result['payoffs'], seat)
+            transitions = reorganize_with_shaping(
+                result['trajectories'], seat, base_reward,
+                target_seat=PLAYER_SEAT,
+                vd_penalty=PASS_PENALTY,
+                target_hit_penalty=TARGET_HIT_PENALTY,
+                opponent_hit_bonus=OPPONENT_HIT_BONUS,
             )
             for transition in transitions:
                 rl_agent.feed(transition)
 
         if episode % eval_every == 0:
             wins, avg_game_length, vd_per_seat = evaluate(
-                game, rl_agent, eval_num_games
+                game, rl_agent, pool, eval_num_games
             )
             loss, epsilon, buffer_size = get_dqn_metrics(rl_agent)
 
