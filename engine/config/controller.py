@@ -1,7 +1,7 @@
 # Win rate controller settings
 
 # Target win rate for the player at seat 0
-TARGET_WIN_RATE = 0.50
+TARGET_WIN_RATE = 0.25
 
 # Proportional adjustment step: how much to adjust bot strength per game
 # Higher = faster convergence but more oscillation

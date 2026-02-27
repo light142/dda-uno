@@ -1,14 +1,16 @@
 """
-Player router — profile, stats, and game history.
+Player router — profile, stats, game history, and bot mode settings.
 """
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from dependencies import get_current_user
 from models import User, Game
+from engine.game_logic.tiers.tier_config import TIER_NAMES
 from .schemas import (
     PlayerStatsSchema,
     PlayerProfileResponse,
@@ -18,6 +20,9 @@ from .schemas import (
 )
 
 router = APIRouter(prefix="/api/users", tags=["Users"])
+
+# Valid bot mode choices: "adaptive" + all 6 tier names
+_VALID_BOT_MODES = {"adaptive"} | TIER_NAMES
 
 
 # ── GET /api/users/me ────────────────────────────────────────────────────
@@ -44,6 +49,7 @@ async def get_profile(user: User = Depends(get_current_user)):
             winRate=round(win_rate, 4),
             currentBotStrength=user.bot_strength,
             targetWinRate=user.target_win_rate,
+            botMode=user.bot_mode,
         ),
     )
 
@@ -91,6 +97,7 @@ async def get_history(
             gameId=g.id,
             status=g.status,
             result=result_str,
+            botTier=g.bot_tier,
             botStrengthStart=g.bot_strength_start,
             botStrengthEnd=g.bot_strength_end,
             playerWinRate=g.player_win_rate_at_game,
@@ -106,6 +113,42 @@ async def get_history(
     )
 
 
+# ── PUT /api/users/me/bot-mode ───────────────────────────────────────────
+
+
+class SetBotModeRequest(BaseModel):
+    mode: str = Field(..., description="'adaptive' or a tier name")
+
+
+class SetBotModeResponse(BaseModel):
+    botMode: str
+
+
+@router.put(
+    "/me/bot-mode",
+    response_model=SetBotModeResponse,
+    summary="Set bot difficulty mode",
+    description=(
+        "Set to 'adaptive' for automatic tier selection based on win rate, "
+        "or a specific tier name to fix all bots to that tier."
+    ),
+)
+async def set_bot_mode(
+    body: SetBotModeRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    mode = body.mode
+    if mode not in _VALID_BOT_MODES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid mode '{mode}'. Use 'adaptive' or one of: {sorted(TIER_NAMES)}",
+        )
+    user.bot_mode = mode
+    await db.commit()
+    return SetBotModeResponse(botMode=mode)
+
+
 # ── DELETE /api/users/me/history ─────────────────────────────────────────
 
 
@@ -115,7 +158,7 @@ async def get_history(
     summary="Clear game history and reset stats",
     description=(
         "Deletes all game records for the player and resets stats "
-        "(games_played, wins, bot_strength) to defaults."
+        "(games_played, wins, bot_mode) to defaults."
     ),
 )
 async def clear_history(
@@ -129,6 +172,7 @@ async def clear_history(
     user.games_played = 0
     user.wins = 0
     user.bot_strength = 0.5
+    user.bot_mode = "adaptive"
 
     await db.commit()
     return None

@@ -35,12 +35,30 @@ Replaces the old AdaptiveAgent coin-flip blending approach.
 - Soft adjustments (adversarial, altruistic, random) appear with varying probability based on win rate gap
 - Hyper tiers are rare: ~5% chance, max 1 in 5-6 games, only when win rate is far from target
 
-### Controller Logic (Future — Mixing Controller)
-- Given win rate gap from target, decide how many bots to assign to each tier
-- Small correction: 2 selfish + 1 altruistic (or 1 adversarial)
-- Medium correction: 1 selfish + 2 altruistic (or 2 adversarial)
-- Large correction: 3 altruistic (or 3 adversarial)
-- Emergency: hyper altruistic or hyper adversarial (rate-limited)
+### Adaptive Tier Controller (Implemented)
+
+The `AdaptiveTierController` (in `engine/game_logic/tiers/tier_controller.py`) selects a tier per-game based on the error between the player's current win rate and their target:
+
+```
+error = current_win_rate - target_win_rate
+
+error < -0.20  ->  hyper_altruistic   (way below target, max help)
+error < -0.10  ->  altruistic         (below target, moderate help)
+error < -0.05  ->  random             (slightly below, easy opponents)
+error <  0.10  ->  selfish            (near target, neutral baseline)
+error <  0.20  ->  adversarial        (above target, push back)
+error >= 0.20  ->  hyper_adversarial  (way above target, max difficulty)
+```
+
+- **Deterministic**: no randomness, same inputs always produce the same tier
+- **Target-relative**: thresholds are offsets from target, works for any target (10%, 25%, 50%)
+- **No history**: defaults to "selfish" when `games_played == 0`
+- **All 3 bot seats use the same tier** per game
+- Thresholds are placeholder values, to be tuned with simulation data
+
+Supports two modes via `BotManager.select_tier()`:
+- **Adaptive** (default): controller picks tier based on win rate
+- **Fixed**: player selects a specific tier via `PUT /api/users/me/bot-mode`
 
 ## Why Not Q-Value Blending
 - Q-value blending creates bots with no coherent personality
@@ -61,7 +79,10 @@ Replaces the old AdaptiveAgent coin-flip blending approach.
 2. ~~**Adversarial**, **altruistic**, **hyper altruistic**~~ — all trained
 3. ~~**Hyper adversarial** (joint training: frozen selfish + cooperative support)~~ — trained
 4. ~~**Simulate** all combinations to build win rate lookup table~~ — simulation tool done
-5. **Mixing controller** (assign tiers to seats based on win rate) — next step
+5. ~~**Adaptive tier controller** (select tier per-game based on win rate)~~ — implemented
+6. ~~**API integration** (BotManager, bot-mode endpoint, DB columns)~~ — implemented
+7. ~~**Adaptive simulation mode** (`--adaptive` flag in simulator)~~ — implemented
+8. **Tune controller thresholds** with simulation data — next step
 
 ## Voluntary Draw Policy
 
@@ -221,3 +242,32 @@ Backward compatibility: `cooperative` is an alias for `hyper_adversarial`.
 Voluntary draw caps are automatically applied per-seat to match each agent's training policy.
 
 Results saved to `simulator/data/tier_results.json`.
+
+### Adaptive Simulation
+
+Test the controller's convergence behavior in a session-based simulation:
+
+```bash
+# Adaptive controller with casual at seat 0, target 25%
+python -m simulator.simulation.simulate --s0 casual --adaptive --games 2000
+
+# Adaptive controller targeting 10% win rate
+python -m simulator.simulation.simulate --s0 rule-v1 --adaptive --adaptive-target 0.10 --games 5000
+```
+
+Uses a running session win rate (wins/total) instead of a database. Outputs tier usage distribution and per-tier win rates.
+
+## Architecture
+
+Tier constants and shared logic live in `engine/game_logic/tiers/` (shared by API, simulator, and engine):
+
+```
+engine/game_logic/tiers/
+  tier_config.py       # TIER_ORDER, TIER_NAMES, VOLUNTARY_DRAW_POLICY, etc.
+  tier_pool.py         # TierModelPool (loads/caches DQN agents)
+  tier_controller.py   # AdaptiveTierController (maps win rate -> tier)
+```
+
+`simulator/config/tiers.py` is a re-export shim that delegates to `engine/game_logic/tiers/` and adds `MODEL_DIR` pointing to `simulator/models/`.
+
+The API's `BotManager` wraps `TierModelPool` + `AdaptiveTierController` and points to `api/models/` for model files.

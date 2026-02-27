@@ -41,7 +41,8 @@ class User(Base):
     games_played = Column(Integer, default=0, nullable=False)
     wins = Column(Integer, default=0, nullable=False)
     bot_strength = Column(Float, default=0.5, nullable=False)
-    target_win_rate = Column(Float, default=0.5, nullable=False)
+    target_win_rate = Column(Float, default=0.25, nullable=False)
+    bot_mode = Column(String(30), default="adaptive", nullable=False)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
 
@@ -54,8 +55,9 @@ class Game(Base):
     state_json = Column(Text, nullable=True)
     winner = Column(Integer, nullable=True)
     turns = Column(Integer, default=0, nullable=False)
-    bot_strength_start = Column(Float, nullable=False)
+    bot_strength_start = Column(Float, nullable=True)
     bot_strength_end = Column(Float, nullable=True)
+    bot_tier = Column(String(30), nullable=True)
     player_win_rate_at_game = Column(Float, nullable=True)
     model_version = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)

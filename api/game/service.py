@@ -2,7 +2,8 @@
 Game service — orchestrates GameSession + BotManager + DB persistence.
 
 Handles game lifecycle: create, play, pass, get state.
-Adjusts bot difficulty per-player after each finished game.
+Uses tier-based adaptive difficulty: the controller selects an agent tier
+per game based on the player's cumulative win rate vs their target.
 """
 
 import json
@@ -90,15 +91,12 @@ def _model_info() -> ModelInfoSchema:
     )
 
 
-def _make_decision_fn(agents: list, use_models: bool):
-    """Create a bot decision callback for the session."""
+def _make_decision_fn(tier: str):
+    """Create a bot decision callback that uses the given tier agent."""
     def decide(player_index: int, hand: list[Card],
                top_card: Card, active_color: str, **context):
-        if use_models and agents:
-            agent = agents[player_index - 1]
-            return _bot_manager.get_bot_decision(
-                agent, hand, top_card, active_color, **context)
-        return _bot_manager.make_random_decision(hand, top_card, active_color)
+        return _bot_manager.get_bot_decision(
+            tier, hand, top_card, active_color, **context)
     return decide
 
 
@@ -211,13 +209,17 @@ async def create_game(user: User, db: AsyncSession) -> StartGameResponse:
     if debug:
         _apply_debug_cards(session, debug)
 
-    # Create bot agents
-    use_models = _bot_manager.models_available()
-    agents = _bot_manager.create_agents(user.bot_strength) if use_models else []
+    # Select tier for this game based on player's win rate and mode
+    games_played = user.games_played or 0
+    wins = user.wins or 0
+    win_rate = wins / games_played if games_played > 0 else 0.0
+    tier = _bot_manager.select_tier(
+        win_rate, games_played, user.bot_mode, user.target_win_rate,
+    )
 
     # Run initial bot turns if player 0 doesn't go first
     if session.current_player != 0:
-        decision_fn = _make_decision_fn(agents, use_models)
+        decision_fn = _make_decision_fn(tier)
         session.run_bot_turns(decision_fn)
 
     # Save game to DB
@@ -227,7 +229,8 @@ async def create_game(user: User, db: AsyncSession) -> StartGameResponse:
         status="in_progress",
         state_json=json.dumps(session.serialize()),
         turns=session.turns,
-        bot_strength_start=user.bot_strength,
+        bot_tier=tier,
+        player_win_rate_at_game=round(win_rate, 4),
         model_version=manifest.get("version", "unknown"),
     )
     db.add(game)
@@ -237,6 +240,7 @@ async def create_game(user: User, db: AsyncSession) -> StartGameResponse:
     game_state = _build_game_state(game, session)
     return StartGameResponse(
         gameState=game_state,
+        botTier=tier,
         modelInfo=_model_info(),
     )
 
@@ -287,10 +291,8 @@ async def play_card(
 
     # Check if human just won
     if result.get("winner") is None:
-        # Run bot turns
-        use_models = _bot_manager.models_available()
-        agents = _bot_manager.create_agents(game.bot_strength_start) if use_models else []
-        decision_fn = _make_decision_fn(agents, use_models)
+        # Run bot turns using the tier stored on this game
+        decision_fn = _make_decision_fn(game.bot_tier)
         bot_turns_raw += session.run_bot_turns(decision_fn)
 
     # Check for winner (human or bot)
@@ -347,9 +349,7 @@ async def pass_turn(
 
     # Run bot turns (unless the auto-play already won the game)
     if result.get("winner") is None:
-        use_models = _bot_manager.models_available()
-        agents = _bot_manager.create_agents(game.bot_strength_start) if use_models else []
-        decision_fn = _make_decision_fn(agents, use_models)
+        decision_fn = _make_decision_fn(game.bot_tier)
         bot_turns_raw += session.run_bot_turns(decision_fn)
 
     # Check for winner
@@ -432,7 +432,11 @@ async def _finish_game(
     winner: int,
     db: AsyncSession,
 ):
-    """Finalize a game: update records, adjust bot strength."""
+    """Finalize a game: update records.
+
+    The next game's create_game() will call select_tier() with the
+    updated win rate — no strength adjustment needed here.
+    """
     game.status = "finished"
     game.winner = winner
     game.turns = session.turns
@@ -444,11 +448,6 @@ async def _finish_game(
     if winner == 0:
         user.wins = (user.wins or 0) + 1
 
-    # Calculate current win rate
+    # Store win rate snapshot for analytics
     win_rate = user.wins / user.games_played if user.games_played > 0 else 0.0
     game.player_win_rate_at_game = round(win_rate, 4)
-
-    # Adjust bot strength via controller
-    new_strength = _bot_manager.adjust_strength(win_rate, user.bot_strength)
-    game.bot_strength_end = new_strength
-    user.bot_strength = new_strength

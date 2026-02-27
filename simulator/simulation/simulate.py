@@ -7,6 +7,8 @@ Modes:
   Single combo: specify agents for all 4 seats, run N games.
   All combos:   enumerate all mixable tier combinations for seats 1-3
                 with a fixed seat 0 agent. Builds a lookup table.
+  Adaptive:     controller dynamically picks tiers per-game based on
+                a running session win rate, simulating live play.
 
 Usage:
     # Specific combination
@@ -20,6 +22,10 @@ Usage:
 
     # All 125 combos for seats 1-3 against rule-v1
     python -m simulator.simulation.simulate --s0 rule-v1 --all --target 0 --games 200
+
+    # Adaptive controller simulation
+    python -m simulator.simulation.simulate --s0 casual --adaptive --games 2000
+    python -m simulator.simulation.simulate --s0 rule-v1 --adaptive --adaptive-target 0.10 --games 5000
 
     # Baseline sanity check
     python -m simulator.simulation.simulate --baseline --games 100
@@ -43,6 +49,7 @@ from engine.config.game import NUM_PLAYERS, PLAYER_SEAT, BOT_SEATS
 from simulator.config.tiers import (
     AGENT_CHOICES, AGENT_ALIASES, MIXABLE_TIERS, TARGET_SEAT_TIERS, FIXED_TARGET,
     VOLUNTARY_DRAW_POLICY, TierModelPool, resolve_agent_name,
+    TIER_ORDER, AdaptiveTierController,
 )
 from simulator.config.simulation import TIER_GAMES, TIER_RESULTS_PATH, DATA_DIR
 from simulator.simulation.game_stats import GameStatCollector, print_stats_summary, plot_stats
@@ -363,6 +370,135 @@ def run_all_combos(args):
     return output
 
 
+def run_adaptive(args):
+    """Simulate with the adaptive controller dynamically picking tiers.
+
+    Seat 0 uses a fixed agent (--s0). Seats 1-3 all use the tier chosen
+    by the AdaptiveTierController each game, based on a running session
+    win rate (wins / total games so far).
+    """
+    seat0 = resolve_agent_name(args.s0)
+    num_games = args.games
+    target_wr = args.adaptive_target
+
+    controller = AdaptiveTierController(target_win_rate=target_wr)
+
+    # Load all tier agents + seat 0 agent
+    all_needed = list(set([seat0] + list(TIER_ORDER)))
+    print()
+    print("=" * 60)
+    print("  ADAPTIVE CONTROLLER SIMULATION")
+    print("=" * 60)
+    print(f"  Seat 0       : {seat0}")
+    print(f"  Target WR    : {target_wr:.0%}")
+    print(f"  Games        : {num_games:,}")
+    print(f"  Controller   : AdaptiveTierController (deterministic)")
+    print("=" * 60)
+    print()
+
+    print("Loading agents...")
+    pool = TierModelPool(tiers_to_load=all_needed)
+    print()
+
+    game = UnoGame()
+    wins = 0
+    total = 0
+    tier_usage = {}
+    tier_wins = {}
+
+    eval_every = 100
+    start_time = time.time()
+
+    print("Running games...")
+    for g in range(num_games):
+        # Running session win rate
+        win_rate = wins / total if total > 0 else 0.0
+
+        # Controller picks the tier
+        tier = controller.select_tier(win_rate, total)
+        tier_usage[tier] = tier_usage.get(tier, 0) + 1
+
+        # Set up agents: seat 0 = fixed, seats 1-3 = tier agent
+        agents = [pool.get(seat0)] + [pool.get(tier)] * 3
+        game.set_agents(agents)
+
+        # Set targets and VD caps for the chosen tier
+        seats = [seat0, tier, tier, tier]
+        game.set_target_seat(build_target_dict(seats, 0))
+        game.set_max_voluntary_draws(get_draw_caps(seats))
+
+        result = game.run_game(is_training=False)
+        winner = result['winner']
+        total += 1
+        if winner == PLAYER_SEAT:
+            wins += 1
+            tier_wins[tier] = tier_wins.get(tier, 0) + 1
+
+        # Progress display
+        done = g + 1
+        wr = wins / total
+        print(
+            f"\r  Game {done:>6}/{num_games}  "
+            f"wr: {wr:.2%}  tier: {tier:>18}  "
+            f"winner: seat {winner}",
+            end="", flush=True,
+        )
+        if done % eval_every == 0:
+            elapsed = time.time() - start_time
+            eta = elapsed / done * (num_games - done)
+            pct = done / num_games * 100
+            bar_len = 20
+            filled = int(bar_len * done / num_games)
+            bar = "█" * filled + "░" * (bar_len - filled)
+            print()
+            print(f"  ┌─ Game {done:,}/{num_games:,} ({pct:.0f}%) [{bar}] ETA: {eta / 60:.1f}m")
+            print(f"  │  Win rate: {wr:.2%}  (target: {target_wr:.0%})")
+            print(f"  │  Current tier: {tier}")
+            print(f"  └{'─' * 50}")
+
+    print()
+
+    # Summary
+    final_wr = wins / total if total > 0 else 0.0
+    elapsed_total = time.time() - start_time
+
+    print()
+    print("=" * 60)
+    print("  RESULTS")
+    print("=" * 60)
+    print(f"  Seat 0 win rate : {final_wr:.2%}  (target: {target_wr:.0%})")
+    print(f"  Total games     : {total}")
+    print(f"  Completed in    : {elapsed_total / 60:.1f} minutes")
+    print()
+    print("  Tier Usage:")
+    print(f"  {'Tier':>20}  {'Games':>6}  {'Usage':>7}  {'S0 WR':>7}")
+    print(f"  {'-' * 20}  {'-' * 6}  {'-' * 7}  {'-' * 7}")
+    for t in TIER_ORDER:
+        count = tier_usage.get(t, 0)
+        t_wins = tier_wins.get(t, 0)
+        t_wr = t_wins / count if count > 0 else 0.0
+        usage_pct = count / total if total > 0 else 0.0
+        print(f"  {t:>20}  {count:>6}  {usage_pct:>6.1%}  {t_wr:>6.2%}")
+    print("=" * 60)
+
+    # Build output
+    output = {
+        'mode': 'adaptive',
+        'metadata': {
+            'seat0': seat0,
+            'target_win_rate': target_wr,
+            'games': num_games,
+        },
+        'final_win_rate': round(final_wr, 4),
+        'tier_usage': {t: tier_usage.get(t, 0) for t in TIER_ORDER},
+        'tier_seat0_win_rates': {
+            t: round(tier_wins.get(t, 0) / tier_usage[t], 4) if tier_usage.get(t, 0) > 0 else None
+            for t in TIER_ORDER
+        },
+    }
+    return output
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Simulate UNO tier combinations",
@@ -371,6 +507,8 @@ def main():
   %(prog)s --s0 rule-v1 --s1 selfish --s2 selfish --s3 selfish --games 100
   %(prog)s --s0 casual --s1 altruistic --s2 selfish --s3 altruistic --target 0
   %(prog)s --s0 rule-v1 --all --target 0 --games 200
+  %(prog)s --s0 casual --adaptive --games 2000
+  %(prog)s --s0 rule-v1 --adaptive --adaptive-target 0.10 --games 5000
 """,
     )
 
@@ -412,6 +550,14 @@ def main():
         '--no-stats', action='store_true', default=False,
         help='Disable stats collection for single combo mode (faster)',
     )
+    parser.add_argument(
+        '--adaptive', action='store_true',
+        help='Adaptive mode: controller picks tier per-game based on running win rate',
+    )
+    parser.add_argument(
+        '--adaptive-target', type=float, default=0.25,
+        help='Target win rate for the adaptive controller (default: 0.25)',
+    )
 
     args = parser.parse_args()
 
@@ -419,7 +565,9 @@ def main():
         args.s0 = args.s1 = args.s2 = args.s3 = 'random'
         args.target = None
 
-    if args.all:
+    if args.adaptive:
+        output = run_adaptive(args)
+    elif args.all:
         output = run_all_combos(args)
     else:
         output = run_single(args)

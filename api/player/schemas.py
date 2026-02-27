@@ -13,6 +13,7 @@ class PlayerStatsSchema(BaseModel):
     winRate: float
     currentBotStrength: float
     targetWinRate: float
+    botMode: str = Field("adaptive", description="'adaptive' or a specific tier name")
 
     model_config = {
         "json_schema_extra": {
@@ -23,6 +24,7 @@ class PlayerStatsSchema(BaseModel):
                     "winRate": 0.4286,
                     "currentBotStrength": 0.63,
                     "targetWinRate": 0.50,
+                    "botMode": "adaptive",
                 }
             ]
         }
@@ -48,6 +50,7 @@ class PlayerProfileResponse(BaseModel):
                         "winRate": 0.4286,
                         "currentBotStrength": 0.63,
                         "targetWinRate": 0.50,
+                        "botMode": "adaptive",
                     },
                 }
             ]
@@ -59,7 +62,8 @@ class GameHistoryItem(BaseModel):
     gameId: str
     status: str
     result: Optional[str] = Field(None, description="'win', 'loss', or null for abandoned")
-    botStrengthStart: float
+    botTier: Optional[str] = Field(None, description="Agent tier used for bots")
+    botStrengthStart: Optional[float] = None
     botStrengthEnd: Optional[float] = None
     playerWinRate: Optional[float] = None
     turns: int
@@ -74,8 +78,9 @@ class GameHistoryItem(BaseModel):
                     "gameId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                     "status": "finished",
                     "result": "win",
-                    "botStrengthStart": 0.55,
-                    "botStrengthEnd": 0.58,
+                    "botTier": "selfish",
+                    "botStrengthStart": None,
+                    "botStrengthEnd": None,
                     "playerWinRate": 0.52,
                     "turns": 23,
                     "modelVersion": "1.0.0",

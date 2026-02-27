@@ -140,15 +140,22 @@ All game endpoints return the same `gameState` structure. This is the single sou
 
 ### `POST /api/games`
 
-Start a new game. No request body — server uses defaults (4 players, 7 cards each).
+Start a new game. No request body — server uses defaults (4 players, 7 cards each). The server selects a bot tier based on the player's win rate and bot mode setting.
 
 **Response (201):**
 ```json
 {
   "gameState": { "..." },
+  "botTier": "selfish",
   "modelInfo": { "version": "1.0.0", "trainedAt": "2026-02-24T10:00:00Z" }
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| gameState | GameState | Initial game state |
+| botTier | string | Agent tier used for all 3 bots in this game |
+| modelInfo | object | Model version and training metadata |
 
 ---
 
@@ -330,10 +337,15 @@ Health check endpoint.
     "gamesWon": 18,
     "winRate": 0.4286,
     "currentBotStrength": 0.63,
-    "targetWinRate": 0.50
+    "targetWinRate": 0.25,
+    "botMode": "adaptive"
   }
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| botMode | string | Current bot difficulty mode: `"adaptive"` or a tier name |
 
 ### `GET /api/users/me/history`
 
@@ -347,8 +359,9 @@ Health check endpoint.
       "gameId": "uuid",
       "status": "finished",
       "result": "win",
-      "botStrengthStart": 0.55,
-      "botStrengthEnd": 0.58,
+      "botTier": "selfish",
+      "botStrengthStart": null,
+      "botStrengthEnd": null,
       "playerWinRate": 0.52,
       "turns": 23,
       "modelVersion": "1.0.0",
@@ -364,16 +377,43 @@ Health check endpoint.
 }
 ```
 
-### `DELETE /api/users/me/history`
+| Field | Type | Description |
+|-------|------|-------------|
+| botTier | string or null | Agent tier used for this game |
+| botStrengthStart | float or null | Legacy bot strength (deprecated) |
+| botStrengthEnd | float or null | Legacy bot strength (deprecated) |
 
-Reset all game stats and history for the current user.
+### `PUT /api/users/me/bot-mode`
+
+Set the bot difficulty mode for future games.
+
+**Request:**
+```json
+{
+  "mode": "adaptive"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| mode | string | `"adaptive"` for automatic tier selection, or a tier name to fix all bots to that tier |
+
+Valid modes: `adaptive`, `hyper_adversarial`, `adversarial`, `selfish`, `random`, `altruistic`, `hyper_altruistic`
 
 **Response (200):**
 ```json
 {
-  "message": "History cleared"
+  "botMode": "adaptive"
 }
 ```
+
+**Error (400):** Invalid mode name.
+
+### `DELETE /api/users/me/history`
+
+Reset all game stats, history, and bot mode for the current user.
+
+**Response (204):** No content
 
 ---
 
@@ -390,8 +430,11 @@ Reset all game stats and history for the current user.
 | games_played | int (default 0) |
 | wins | int (default 0) |
 | bot_strength | float (default 0.5) |
-| target_win_rate | float (default 0.5) |
+| target_win_rate | float (default 0.25) |
+| bot_mode | string (default "adaptive") |
 | created_at | datetime |
+
+`bot_mode`: `"adaptive"` uses the AdaptiveTierController to pick a tier per-game based on win rate. Any tier name (e.g. `"selfish"`, `"altruistic"`) forces all bots to that tier.
 
 ### Game
 
@@ -403,12 +446,15 @@ Reset all game stats and history for the current user.
 | state_json | text (serialized game state) |
 | winner | int or null (seat index 0-3) |
 | turns | int |
-| bot_strength_start | float |
-| bot_strength_end | float or null |
+| bot_tier | string or null |
+| bot_strength_start | float or null (legacy) |
+| bot_strength_end | float or null (legacy) |
 | player_win_rate_at_game | float or null |
 | model_version | string or null |
 | created_at | datetime |
 | finished_at | datetime or null |
+
+`bot_tier`: the agent tier used for all 3 bot seats during this game (e.g. `"selfish"`, `"altruistic"`).
 
 ### Card
 
@@ -463,6 +509,7 @@ Reset all game stats and history for the current user.
 | DELETE | `/api/games/debug/cards` | Clear debug cards |
 | GET | `/api/users/me` | Get profile & stats |
 | GET | `/api/users/me/history` | Get game history |
-| DELETE | `/api/users/me/history` | Reset stats & history |
+| PUT | `/api/users/me/bot-mode` | Set bot difficulty mode |
+| DELETE | `/api/users/me/history` | Reset stats, history & bot mode |
 | GET | `/api/models/info` | Model version info |
 | GET | `/health` | Health check |

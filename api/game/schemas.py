@@ -163,6 +163,7 @@ class DebugCardsResponse(BaseModel):
 
 class StartGameResponse(BaseModel):
     gameState: GameStateSchema
+    botTier: str = Field(..., description="Agent tier used for bots in this game")
     modelInfo: ModelInfoSchema
 
 

@@ -34,7 +34,7 @@ simulator/
 ├── config/
 │   ├── simulation.py        # TIER_GAMES, data paths
 │   ├── training.py          # NUM_EPISODES, LR, opponent pools, DQN hyperparams
-│   └── tiers.py             # Tier registry, model resolution, voluntary draw policy
+│   └── tiers.py             # Re-export shim (delegates to engine/game_logic/tiers/)
 ├── simulation/
 │   ├── simulate.py          # Run any tier combination
 │   └── game_stats.py        # Rich per-game stats collector + plots
@@ -144,6 +144,27 @@ python -m simulator.simulation.simulate --s0 rule-v1 --s1 selfish --s2 altruisti
 python -m simulator.simulation.simulate --s0 rule-v1 --all --target 0 --games 200
 ```
 
+### Step 3.5: Simulate Adaptive Controller
+
+Test the `AdaptiveTierController` in a session-based simulation. Seat 0 uses a fixed agent; seats 1-3 are dynamically assigned by the controller each game based on a running win rate.
+
+```bash
+# Adaptive controller with casual at seat 0, default target 25%
+python -m simulator.simulation.simulate --s0 casual --adaptive --games 2000
+
+# Adaptive controller with rule-v1 at seat 0, target 10%
+python -m simulator.simulation.simulate --s0 rule-v1 --adaptive --adaptive-target 0.10 --games 5000
+
+# Adaptive controller with pro at seat 0, target 50%
+python -m simulator.simulation.simulate --s0 pro --adaptive --adaptive-target 0.50 --games 3000
+```
+
+The controller uses the same `AdaptiveTierController` as the API, but with a session running counter (wins/total) instead of a database. Output includes:
+- Per-game tier selection and running win rate
+- Tier usage distribution (how many games each tier was selected)
+- Per-tier seat 0 win rates (how well seat 0 did against each tier)
+- Final convergence: actual win rate vs target
+
 **Agent choices** for any seat: `random`, `rule-v1`, `noob`, `casual`, `pro`, `selfish`, `adversarial`, `altruistic`, `hyper_altruistic`, `hyper_adversarial`
 
 Backward compatibility: `cooperative` is an alias for `hyper_adversarial`.
@@ -153,12 +174,12 @@ Backward compatibility: `cooperative` is an alias for `hyper_adversarial`.
 - `hyper_adversarial` — requires `--target N` from CLI (which bot teammate to help)
 - All others — no target (plane 11 all zeros)
 
-**Voluntary draw** is automatically set per-seat to match each agent's training policy:
+**Voluntary draw** is automatically set per-seat to match each agent's training policy (from `VOLUNTARY_DRAW_POLICY` in `engine/game_logic/tiers/tier_config.py`):
 
 | Agent | VD Cap | Notes |
 |-------|--------|-------|
-| selfish | 5 | Learns strategic draw timing |
-| adversarial | 5 | Learns strategic draw timing |
+| selfish | 0 | Trained with VD disabled |
+| adversarial | 0 | Trained with VD disabled |
 | hyper_altruistic | 5 | Learns strategic passing to help seat 0 |
 | hyper_adversarial | 0 | Support bots help via card play, not drawing |
 | altruistic | 0 | Helps via card play, no drawing |

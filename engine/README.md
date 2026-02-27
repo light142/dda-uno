@@ -34,8 +34,8 @@ ada-uno/
 
 ```
 engine/
-├── __init__.py               # Re-exports: UnoGame, AdaptiveAgent, WinRateController, etc.
-├── controller.py             # Re-exports WinRateController for convenience
+├── __init__.py               # Re-exports: UnoGame, TierModelPool, AdaptiveTierController, etc.
+├── controller.py             # Re-exports WinRateController for convenience (legacy)
 ├── requirements.txt
 ├── README.md
 ├── config/
@@ -45,13 +45,18 @@ engine/
 ├── game_logic/
 │   ├── __init__.py           # Re-exports core classes
 │   ├── game.py               # UnoGame: RLCard env wrapper (4-player UNO)
-│   ├── controller.py         # WinRateController: proportional control
+│   ├── controller.py         # WinRateController: proportional control (legacy)
 │   ├── store.py              # PlayerStore: SQLite player history backend
 │   ├── agents/
 │   │   ├── __init__.py       # Re-exports BaseAgent, RLAgent, AdaptiveAgent
 │   │   ├── base.py           # BaseAgent ABC (shared interface)
 │   │   ├── rl_agent.py       # RLAgent: DQN wrapper, train/save/load
-│   │   └── adaptive.py       # AdaptiveAgent: blends strong + weak agents
+│   │   └── adaptive.py       # AdaptiveAgent: blends strong + weak (legacy)
+│   ├── tiers/                # Tier-based adaptive difficulty system
+│   │   ├── __init__.py       # Re-exports TierModelPool, AdaptiveTierController, constants
+│   │   ├── tier_config.py    # TIER_ORDER, TIER_NAMES, VD policy, agent choices
+│   │   ├── tier_pool.py      # TierModelPool: loads/caches agents by tier name
+│   │   └── tier_controller.py # AdaptiveTierController: maps win rate to tier
 │   └── bots/
 │       ├── __init__.py       # get_bot("noob"|"casual"|"pro") factory
 │       ├── noob.py           # NoobBot: random + color preference
@@ -76,37 +81,51 @@ pip install -r requirements.txt
 The engine is imported by `api/` and `simulator/`:
 
 ```python
-from engine import UnoGame, AdaptiveAgent, WinRateController, PlayerStore
+from engine import UnoGame, TierModelPool, AdaptiveTierController
+from engine.game_logic.tiers.tier_config import TIER_ORDER, TIER_NAMES, VOLUNTARY_DRAW_POLICY
 from engine.config.game import NUM_PLAYERS, STATE_SHAPE
-from engine.config.controller import TARGET_WIN_RATE
 from engine.game_logic.bots import get_bot
 ```
 
 ## How It Works
 
-### The Win Rate Controller
+### Tier-Based Adaptive Difficulty
 
-After each game, the controller adjusts bot strength:
+The engine provides a 6-tier system for controlling bot difficulty. Each tier is a distinct agent with a different reward structure and play style:
+
+| Tier | Behavior | Difficulty for Seat 0 |
+|------|----------|-----------------------|
+| hyper_adversarial | Cooperative bots targeting seat 0 | Hardest |
+| adversarial | Team play against seat 0 | Hard |
+| selfish | Each bot plays to win individually | Neutral |
+| random | Random legal actions | Easy |
+| altruistic | Trained to help seat 0 win | Easier |
+| hyper_altruistic | Strongly trained to help seat 0 win | Easiest |
+
+### The Adaptive Tier Controller
+
+The `AdaptiveTierController` selects which tier to use based on the player's win rate vs a configurable target:
 
 ```
-error = actual_win_rate - target_win_rate
-new_strength = current_strength + ADJUSTMENT_STEP * error
-strength = clamp(new_strength, 0.0, 1.0)
+error = current_win_rate - target_win_rate
+
+error < -0.20  ->  hyper_altruistic   (way below target)
+error < -0.10  ->  altruistic         (below target)
+error < -0.05  ->  random             (slightly below)
+error <  0.10  ->  selfish            (near target, baseline)
+error <  0.20  ->  adversarial        (above target)
+error >= 0.20  ->  hyper_adversarial  (way above target)
 ```
 
-- Player winning too much → increase strength → bots play harder
-- Player losing too much → decrease strength → bots play softer
+All 3 bot seats use the same tier per game. No games played yet defaults to "selfish".
 
-### The Adaptive Agent
+### TierModelPool
 
-Each bot at seats 1-3 blends a strong and weak RL agent:
+Loads and caches DQN agents by tier name. Accepts a configurable `model_dir` so the API and simulator can point to different model directories. Falls back to `RandomAgent` when model files are missing.
 
-```
-if random() < strength:
-    action = strong_agent.eval_step(state)   # play to win
-else:
-    action = weak_agent.eval_step(state)     # play to help seat 0
-```
+### Legacy System
+
+The `WinRateController` (proportional float) and `AdaptiveAgent` (coin-flip blending) are kept for backward compatibility but are no longer used by the API or simulator.
 
 ### Fixed Bots
 
@@ -126,7 +145,7 @@ Used as seat-0 stand-ins during simulation, or as fallbacks:
 | `SEED` | config/game.py | None | Random seed |
 | `STATE_SHAPE` | config/game.py | [12,4,15] | Enriched observation: 12 planes (hand, target, seat, counts, direction, discard, etc.) |
 | `NUM_ACTIONS` | config/game.py | 61 | RLCard action space size |
-| `TARGET_WIN_RATE` | config/controller.py | 0.50 | Target win rate |
+| `TARGET_WIN_RATE` | config/controller.py | 0.25 | Target win rate |
 | `ADJUSTMENT_STEP` | config/controller.py | 0.05 | Controller gain |
 | `INITIAL_STRENGTH` | config/controller.py | 0.5 | Starting bot strength |
 

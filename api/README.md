@@ -53,12 +53,12 @@ api/
 │   ├── schemas.py           # CardSchema, GameStateSchema, PlayRequest, PlayResponse, etc.
 │   ├── service.py           # Orchestrates GameSession + BotManager + DB
 │   ├── session.py           # RLCard-backed GameSession (serialize/deserialize)
-│   ├── bot_manager.py       # Loads AdaptiveAgent, queries decisions, adjusts strength
+│   ├── bot_manager.py       # Tier-based bot decisions via TierModelPool + AdaptiveTierController
 │   ├── cards.py             # Card dataclass, validation helpers
 │   └── rlcard_bridge.py     # Translates API Card <-> RLCard action IDs
 │
-├── player/                  # Player profile & history
-│   ├── router.py            # GET /me, GET /me/history, DELETE /me/history
+├── player/                  # Player profile, history & bot mode
+│   ├── router.py            # GET /me, GET /me/history, DELETE /me/history, PUT /me/bot-mode
 │   └── schemas.py           # PlayerStatsSchema, GameHistoryItem, etc.
 │
 ├── models/                  # Model metadata
@@ -93,9 +93,10 @@ api/
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/me` | Player profile + stats |
-| GET | `/me/history` | Paginated game history |
-| DELETE | `/me/history` | Reset stats and history |
+| GET | `/me` | Player profile + stats (includes `botMode`) |
+| GET | `/me/history` | Paginated game history (includes `botTier` per game) |
+| PUT | `/me/bot-mode` | Set bot difficulty mode (`adaptive` or a tier name) |
+| DELETE | `/me/history` | Reset stats, history, and bot mode |
 
 ### Other
 
@@ -133,7 +134,18 @@ docker run -p 8000:8000 ada-uno-api
 The API imports from the shared engine package (no duplication):
 
 ```python
-from engine import AdaptiveAgent, WinRateController
+from engine.game_logic.tiers import TierModelPool, AdaptiveTierController
+from engine.game_logic.tiers.tier_config import TIER_ORDER, TIER_NAMES, VOLUNTARY_DRAW_POLICY
 from engine.game_logic.game import UnoGame
 from engine.config.game import NUM_PLAYERS, PLAYER_SEAT
 ```
+
+## Tier-Based Adaptive Difficulty
+
+The API uses a tier-based system (replacing the old AdaptiveAgent coin-flip):
+
+- **6 tiers** (hardest to easiest): hyper_adversarial, adversarial, selfish, random, altruistic, hyper_altruistic
+- **AdaptiveTierController** selects a tier per-game based on `error = win_rate - target_win_rate`
+- **Fixed mode**: players can lock all bots to a specific tier via `PUT /me/bot-mode`
+- **BotManager** loads all tier agents at startup via `TierModelPool` — no per-game disk I/O
+- Missing model files fall back to random agent (graceful degradation)

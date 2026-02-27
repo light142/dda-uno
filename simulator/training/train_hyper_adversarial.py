@@ -2,8 +2,8 @@
 
 Replaces the old cooperative training with a proper joint training setup.
 Two DQN networks operate in the same game:
-  - Star seat (frozen selfish checkpoint): plays to win, rotates among bot seats
-  - Support seats (cooperative DQN, training): learn to help the star win
+  - Star seat (frozen selfish checkpoint): always at seat 2
+  - Support seats (cooperative DQN, training): seats 1 & 3, learn to help the star win
 
 Cooperative reward: +2 when star wins, +1 when other bot wins,
 -2 when seat 0 (human) wins.
@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from engine.game_logic.game import UnoGame
 from engine.game_logic.agents import RLAgent
-from engine.config.game import NUM_PLAYERS, NUM_ACTIONS, PLAYER_SEAT, BOT_SEATS
+from engine.config.game import NUM_PLAYERS, NUM_ACTIONS, PLAYER_SEAT
 from simulator.config.training import (
     NUM_EPISODES, EVAL_EVERY, EVAL_NUM_GAMES,
     MODEL_DIR, SAVE_EVERY, OPPONENT_POOL,
@@ -52,7 +52,7 @@ SEAT0_WIN_PENALTY = -2.0    # Seat 0 wins — catastrophic
 # Per-step reward shaping (for support seats)
 TARGET_HIT_PENALTY = -1.0   # strong penalty for skip/draw-2/wild+4 on star seat
 OPPONENT_HIT_BONUS = 0.5    # bonus for skip/draw-2/wild+4 on seat 0 or others
-PASS_PENALTY = -0.5         # per-step penalty for voluntary draws (strategic passing)
+PASS_PENALTY = -1         # per-step penalty for voluntary draws (strategic passing)
 SUPPORT_VD_CAP = 5          # voluntary draw cap for support bots
 
 # Opponent weights for seat 0 (bias toward strong)
@@ -90,15 +90,15 @@ def pick_weighted_opponent(pool):
 
 
 def evaluate(game, selfish_agent, coop_agent, pool, num_games):
-    """Evaluate with mixed opponents at seat 0, random star seat among 1-3."""
+    """Evaluate with mixed opponents at seat 0, selfish fixed at seat 2."""
+    star_seat = 2
+    support_seats = [1, 3]
+
     role_wins = {"seat0": 0, "star": 0, "support": 0}
     total_game_length = 0
     total_vd = {i: 0 for i in range(NUM_PLAYERS)}
 
     for _ in range(num_games):
-        star_seat = random.choice(BOT_SEATS)
-        support_seats = [s for s in BOT_SEATS if s != star_seat]
-
         name, seat0_agent, seat0_vd = pick_weighted_opponent(pool)
 
         agents = [None] * NUM_PLAYERS
@@ -198,7 +198,7 @@ def train(fresh=False, test=False):
     print("=" * 60)
     print("  HYPER-ADVERSARIAL JOINT TRAINING")
     print("=" * 60)
-    print(f"  Star agent      : frozen selfish_agent.pt")
+    print(f"  Star agent      : frozen selfish_agent.pt (fixed seat 2)")
     print(f"  Support reward  : +{TARGET_WIN_REWARD} star, +{BOT_WIN_REWARD} bot, {SEAT0_WIN_PENALTY} seat0")
     print(f"  Action shaping  : {TARGET_HIT_PENALTY} hit star, +{OPPONENT_HIT_BONUS} hit opponent")
     print(f"  Voluntary draw  : ENABLED for support (cap={SUPPORT_VD_CAP}, penalty={PASS_PENALTY}/step)")
@@ -231,11 +231,10 @@ def train(fresh=False, test=False):
     pool = create_opponent_pool(OPPONENT_POOL)
     logger = TrainingLogger(MODEL_DIR, "hyper_adversarial")
 
-    for episode in range(start_episode, num_episodes + 1):
-        # Rotate star seat among bot seats
-        star_seat = random.choice(BOT_SEATS)
-        support_seats = [s for s in BOT_SEATS if s != star_seat]
+    star_seat = 2
+    support_seats = [1, 3]
 
+    for episode in range(start_episode, num_episodes + 1):
         # Pick seat 0 opponent
         name, seat0_agent, seat0_vd = pick_weighted_opponent(pool)
 
@@ -293,7 +292,8 @@ def train(fresh=False, test=False):
             vd_parts = [f"s{s}={vd_per_seat.get(s, 0):.1f}" for s in range(4)]
             print(f"  \u2502  Avg VD per seat     : {'  '.join(vd_parts)}")
             print(f"  \u2502  Buffer              : {buffer_size:,} / {REPLAY_MEMORY_SIZE:,}")
-            print(f"  \u2514{'\u2500' * 50}")
+            border = '\u2500' * 50
+            print(f"  \u2514{border}")
 
             # Convert role wins to seat-style dict for logger (0=opponent, 1=bots)
             logger.log_eval(
