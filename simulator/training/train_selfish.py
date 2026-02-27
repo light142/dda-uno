@@ -1,13 +1,14 @@
 """Train a selfish agent: each bot learns to win for itself.
 
-Standard individual reward: +1 when THIS bot wins, -1 otherwise.
-Uses RLCard's default payoffs directly (no custom reward function).
+Individual reward: +1 when any bot wins, -1 when seat 0 wins.
+DQN at seats 1-3, mixed opponent at seat 0.
 
-Random seat assignment: the DQN agent can sit at any seat (0-3),
-with varied opponents filling the remaining seats. This teaches
-the agent to win from any position.
+Per-step reward shaping (ProBot/rule-v1 inspired):
+  - Power cards (skip/reverse/draw2/wild+4) conserved during normal play
+  - Power cards rewarded when next player is about to win (1-2 cards)
+  - Regular wilds penalized when non-wild options exist (paving card only)
 
-Curriculum opponent scheduling: weak opponents first, then medium, then full pool.
+Full opponent pool (random, rule-v1, noob, casual, pro) from the start.
 Self-play with own checkpoints enabled after 40% of training.
 
 Supports resume, --fresh, and --test flags.
@@ -21,17 +22,17 @@ Usage:
 import os
 import sys
 import glob
-import random
 import argparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from engine.game_logic.game import UnoGame
 from engine.game_logic.agents import RLAgent
-from engine.config.game import NUM_PLAYERS, NUM_ACTIONS
+from engine.config.game import NUM_PLAYERS, PLAYER_SEAT, BOT_SEATS
 from simulator.config.training import (
     NUM_EPISODES, EVAL_EVERY, EVAL_NUM_GAMES,
-    MODEL_DIR, SAVE_EVERY, OPPONENT_POOL,
+    MODEL_DIR, SAVE_EVERY, OPPONENT_POOL, REPLAY_MEMORY_SIZE,
+    SELFISH_CHECKPOINT_START,
 )
 from simulator.config.tiers import VOLUNTARY_DRAW_POLICY
 from simulator.training.opponents import (
@@ -40,82 +41,27 @@ from simulator.training.opponents import (
 from simulator.training.metrics import (
     TrainingLogger, count_voluntary_draws, get_dqn_metrics,
     print_eval_header, print_eval_metrics, patch_dqn_loss_tracking,
+    reorganize_selfish_shaping,
 )
 
 SELFISH_DIR = os.path.join(MODEL_DIR, "selfish")
 
-# DQN hyperparameters (selfish-specific overrides)
-SELFISH_MLP_LAYERS = [512, 512]
-SELFISH_REPLAY_SIZE = 500_000
-SELFISH_BATCH_SIZE = 64
-
-# Seat weights: favor fewer DQN agents for clearer learning signal
-SELFISH_SEAT_WEIGHTS = {1: 20, 2: 30, 3: 35, 4: 15}
-
-# Curriculum opponent scheduling (progress threshold, opponent list)
-CURRICULUM = [
-    (0.00, ["random", "noob"]),
-    (0.25, ["random", "noob", "rule-v1", "casual"]),
-    (0.50, ["random", "rule-v1", "noob", "casual", "pro"]),
-]
+# Per-step reward shaping constants
+POWER_CARD_WASTE = -0.2   # power card when no danger + alternatives exist
+POWER_CARD_BLOCK = 0.3    # power card when next player <= 2 cards
+WILD_WASTE = -0.15        # regular wild when non-wild playable
 
 # Self-play: load own checkpoints as opponents
 SELF_PLAY_START = 0.40
 SELF_PLAY_REFRESH_PCT = 0.05
 
 
-def get_curriculum_pool(progress):
-    """Return the opponent list for the current training progress.
-
-    Args:
-        progress: Current episode / total episodes (0.0 to 1.0).
-
-    Returns:
-        List of opponent names for this phase.
-    """
-    pool_names = CURRICULUM[0][1]
-    for threshold, names in CURRICULUM:
-        if progress >= threshold:
-            pool_names = names
-    return pool_names
-
-
-def pick_seat_config(pool, selfish_entry, seat_weights):
-    """Pick random DQN seat assignment and fill opponents.
-
-    Args:
-        pool: Opponent pool from create_opponent_pool().
-        selfish_entry: Optional selfish checkpoint entry, or None.
-        seat_weights: Dict {num_dqn_seats: weight}.
-
-    Returns:
-        (dqn_seats, agents_map, vd_caps) where:
-            dqn_seats: list of seat indices with DQN agent
-            agents_map: dict {seat: agent} for non-DQN seats
-            vd_caps: dict {seat: vd_cap} for all seats
-    """
-    # Pick number of DQN seats
-    counts = list(seat_weights.keys())
-    weights = list(seat_weights.values())
-    num_dqn = random.choices(counts, weights=weights, k=1)[0]
-
-    # Pick which seats are DQN
-    all_seats = list(range(NUM_PLAYERS))
-    dqn_seats = sorted(random.sample(all_seats, num_dqn))
-
-    # Fill remaining seats with opponents
-    agents_map = {}
-    vd_caps = {}
-
-    for seat in all_seats:
-        if seat in dqn_seats:
-            vd_caps[seat] = VOLUNTARY_DRAW_POLICY.get("selfish", 0)
-        else:
-            name, agent, vd_cap = pick_opponent(pool, selfish_entry)
-            agents_map[seat] = agent
-            vd_caps[seat] = vd_cap
-
-    return dqn_seats, agents_map, vd_caps
+def selfish_reward(payoffs):
+    """Individual reward: +1 if any bot wins, -1 if seat 0 wins."""
+    winner = max(range(len(payoffs)), key=lambda i: payoffs[i])
+    if winner in BOT_SEATS:
+        return 1.0
+    return -1.0
 
 
 def evaluate(game, rl_agent, pool, num_games):
@@ -129,7 +75,7 @@ def evaluate(game, rl_agent, pool, num_games):
 
         agents = [None] * NUM_PLAYERS
         agents[0] = seat0_agent
-        for seat in [1, 2, 3]:
+        for seat in BOT_SEATS:
             agents[seat] = rl_agent.agent
         game.set_agents(agents)
         game.set_max_voluntary_draws({0: seat0_vd, 1: 0, 2: 0, 3: 0})
@@ -180,7 +126,6 @@ def train(fresh=False, test=False):
     save_every = 100 if test else SAVE_EVERY
     eval_num_games = 20 if test else EVAL_NUM_GAMES
 
-    # Check for resume
     start_episode = 1
     checkpoint_path = None
 
@@ -193,15 +138,11 @@ def train(fresh=False, test=False):
     print("=" * 60)
     print("  SELFISH AGENT TRAINING")
     print("=" * 60)
-    print(f"  Seat assignment : random (DQN at any seat)")
-    print(f"  DQN seat weights: {SELFISH_SEAT_WEIGHTS}")
-    print(f"  Curriculum      : {len(CURRICULUM)} phases")
-    for thresh, names in CURRICULUM:
-        print(f"    {thresh:.0%}: {names}")
+    print(f"  Seat assignment : fixed (DQN at seats 1-3)")
+    print(f"  Reward shaping  : power={POWER_CARD_WASTE}/{POWER_CARD_BLOCK}, wild={WILD_WASTE}")
+    print(f"  Opponent pool   : {OPPONENT_POOL}")
     print(f"  Self-play       : after {SELF_PLAY_START:.0%} of training")
-    print(f"  Network         : {SELFISH_MLP_LAYERS}")
-    print(f"  Replay buffer   : {SELFISH_REPLAY_SIZE:,}")
-    print(f"  Batch size      : {SELFISH_BATCH_SIZE}")
+    print(f"  Network         : [256, 256]")
     print(f"  Episodes        : {start_episode:,} -> {num_episodes:,}")
     if test:
         print(f"  Mode            : SMOKE TEST")
@@ -217,26 +158,16 @@ def train(fresh=False, test=False):
         print("Already completed all episodes. Use --fresh to restart.")
         return
 
-    # Create game and agents
     game = UnoGame()
 
-    # Create the RL agent
     if checkpoint_path:
         rl_agent = RLAgent(model_path=checkpoint_path)
     else:
-        rl_agent = RLAgent(
-            mlp_layers=SELFISH_MLP_LAYERS,
-            replay_memory_size=SELFISH_REPLAY_SIZE,
-            batch_size=SELFISH_BATCH_SIZE,
-        )
+        rl_agent = RLAgent()
     patch_dqn_loss_tracking(rl_agent)
 
-    # Create opponent pools (curriculum starts with phase 1, eval always uses full pool)
-    current_pool_names = get_curriculum_pool(start_episode / num_episodes)
-    pool = create_opponent_pool(current_pool_names)
-    eval_pool = create_opponent_pool(OPPONENT_POOL)
+    pool = create_opponent_pool(OPPONENT_POOL)
 
-    # Metrics logger
     logger = TrainingLogger(MODEL_DIR, "selfish")
 
     # Self-play state
@@ -245,14 +176,6 @@ def train(fresh=False, test=False):
     self_play_refresh = max(1, int(num_episodes * SELF_PLAY_REFRESH_PCT))
 
     for episode in range(start_episode, num_episodes + 1):
-        # Curriculum: check if opponent pool should change
-        progress = episode / num_episodes
-        new_pool_names = get_curriculum_pool(progress)
-        if new_pool_names != current_pool_names:
-            current_pool_names = new_pool_names
-            pool = create_opponent_pool(current_pool_names)
-            print(f"  + Curriculum phase: {current_pool_names}")
-
         # Self-play: load own checkpoints after threshold
         if episode >= self_play_start and episode % self_play_refresh == 0:
             new_entry = try_load_selfish_checkpoint(MODEL_DIR)
@@ -263,38 +186,34 @@ def train(fresh=False, test=False):
                     print(f"  + Self-play checkpoint refreshed")
                 selfish_entry = new_entry
 
-        # Pick seat configuration
-        dqn_seats, agents_map, vd_caps = pick_seat_config(
-            pool, selfish_entry, SELFISH_SEAT_WEIGHTS
-        )
+        # Pick opponent for seat 0
+        name, seat0_agent, seat0_vd = pick_opponent(pool, selfish_entry)
 
-        # Build agent list
         agents = [None] * NUM_PLAYERS
-        for seat in range(NUM_PLAYERS):
-            if seat in dqn_seats:
-                agents[seat] = rl_agent.agent
-            else:
-                agents[seat] = agents_map[seat]
+        agents[0] = seat0_agent
+        for seat in BOT_SEATS:
+            agents[seat] = rl_agent.agent
 
         game.set_agents(agents)
-        game.set_max_voluntary_draws(vd_caps)
+        game.set_max_voluntary_draws({0: seat0_vd, 1: 0, 2: 0, 3: 0})
 
-        # Run one game
         result = game.run_game(is_training=True)
 
-        # Feed transitions only from DQN seats (standard payoffs)
-        all_transitions = game.get_training_data(
-            result['trajectories'],
-            result['payoffs'],
-        )
-        for seat in dqn_seats:
-            for transition in all_transitions[seat]:
+        # Feed with selfish reward + per-step power card shaping
+        base_reward = selfish_reward(result['payoffs'])
+        for seat in BOT_SEATS:
+            transitions = reorganize_selfish_shaping(
+                result['trajectories'], seat, base_reward,
+                power_waste=POWER_CARD_WASTE,
+                power_block=POWER_CARD_BLOCK,
+                wild_waste=WILD_WASTE,
+            )
+            for transition in transitions:
                 rl_agent.feed(transition)
 
-        # Periodic evaluation (always uses full opponent pool)
         if episode % eval_every == 0:
             wins, avg_game_length, vd_per_seat = evaluate(
-                game, rl_agent, eval_pool, eval_num_games
+                game, rl_agent, pool, eval_num_games
             )
             loss, epsilon, buffer_size = get_dqn_metrics(rl_agent)
 
@@ -302,7 +221,7 @@ def train(fresh=False, test=False):
             print_eval_metrics(
                 wins, eval_num_games, loss, epsilon,
                 avg_game_length, vd_per_seat,
-                buffer_size, SELFISH_REPLAY_SIZE,
+                buffer_size, REPLAY_MEMORY_SIZE,
                 bots_label="selfish",
             )
 
@@ -311,13 +230,11 @@ def train(fresh=False, test=False):
                 avg_game_length, vd_per_seat, buffer_size,
             )
 
-        # Periodic save + plot
         if episode % save_every == 0:
             rl_agent.save(SELFISH_DIR, f"checkpoint_{episode}.pt")
             logger.plot()
             print(f"  \u2713 Checkpoint saved: episode {episode:,}")
 
-    # Final save
     rl_agent.save(SELFISH_DIR, "selfish_agent.pt")
     logger.plot()
     print()

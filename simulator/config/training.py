@@ -29,8 +29,5 @@ SAVE_EVERY = 10_000       # Save checkpoint every N episodes
 OPPONENT_POOL = ["random", "rule-v1", "noob", "casual", "pro"]
 ALTRUISTIC_POOL = ["random", "rule-v1", "noob", "casual", "pro", "random-vd"]
 
-# Selfish random seat assignment weights {num_dqn_seats: weight}
-SELFISH_SEAT_WEIGHTS = {1: 10, 2: 15, 3: 45, 4: 30}
-
 # When to start including selfish checkpoints as opponents (fraction of NUM_EPISODES)
 SELFISH_CHECKPOINT_START = 0.20

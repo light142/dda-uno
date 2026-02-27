@@ -15,6 +15,7 @@ WILD_IDS = {13, 28, 43, 58}
 WILD_DRAW4_IDS = {14, 29, 44, 59}
 OFFENSIVE_ACTION_IDS = SKIP_IDS | DRAW2_IDS | WILD_DRAW4_IDS
 ALL_SPECIAL_IDS = SKIP_IDS | REVERSE_IDS | DRAW2_IDS | WILD_IDS | WILD_DRAW4_IDS
+POWER_CARD_IDS = SKIP_IDS | REVERSE_IDS | DRAW2_IDS | WILD_DRAW4_IDS
 
 
 class TrainingLogger:
@@ -224,6 +225,66 @@ def reorganize_with_shaping(trajectories, seat, base_reward, target_seat,
     return transitions
 
 
+def reorganize_selfish_shaping(trajectories, seat, base_reward,
+                               power_waste=-0.2, power_block=0.3,
+                               wild_waste=-0.15):
+    """Reorganize trajectory with selfish per-step reward shaping.
+
+    Power card resource management: conserve skip/reverse/draw2/wild+4
+    during normal play, but reward using them when the next player is
+    close to winning (1-2 cards). Regular wilds are paving cards — penalize
+    wasting them when non-wild options exist.
+
+    Args:
+        trajectories: Raw per-seat trajectory lists from run_game().
+        seat: Seat index to extract transitions for.
+        base_reward: Game outcome reward for the terminal step.
+        power_waste: Penalty for power cards when no danger + alternatives.
+        power_block: Bonus for power cards when next player <= 2 cards.
+        wild_waste: Penalty for regular wild when non-wild was playable.
+
+    Returns:
+        List of [state, action, reward, next_state, done] transitions.
+    """
+    traj = trajectories[seat]
+    transitions = []
+
+    for i in range(0, len(traj) - 2, 2):
+        state = traj[i]
+        action = traj[i + 1]
+        next_state = traj[i + 2]
+        is_terminal = (i + 2 >= len(traj) - 1)
+
+        if is_terminal:
+            reward = base_reward
+        elif action in POWER_CARD_IDS:
+            # Check if next player is close to winning
+            next_player = int(state['obs'][6, :, 0].argmax())
+            next_cards = state['obs'][5, next_player, 0]
+            danger = next_cards <= 2
+
+            if danger:
+                reward = power_block
+            elif len(state['legal_actions']) > 1:
+                reward = power_waste
+            else:
+                reward = 0.0  # forced play (only legal action)
+        elif action in WILD_IDS:
+            # Regular wild: penalize if non-wild options existed
+            non_wild = [a for a in state['legal_actions']
+                        if a not in WILD_IDS and a != DRAW_ACTION_ID]
+            if non_wild:
+                reward = wild_waste
+            else:
+                reward = 0.0  # no non-wild alternative
+        else:
+            reward = 0.0
+
+        transitions.append([state, action, reward, next_state, is_terminal])
+
+    return transitions
+
+
 def patch_dqn_loss_tracking(rl_agent):
     """Monkey-patch DQN agent to store loss after each training step.
 
@@ -301,4 +362,5 @@ def print_eval_metrics(wins, num_games, loss, epsilon, avg_game_length,
     print(f"  \u2502  Avg VD per seat     : {'  '.join(vd_parts)}")
 
     print(f"  \u2502  Buffer              : {buffer_size:,} / {buffer_max:,}")
-    print(f"  \u2514{'\u2500' * 50}")
+    border = '\u2500' * 50
+    print(f"  \u2514{border}")
