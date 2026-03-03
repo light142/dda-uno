@@ -50,26 +50,32 @@ export class CardDealer {
      * @param {Function} onComplete
      */
     dealToMultiplePlayers(players, playerHands, onComplete) {
-        const cardsPerPlayer = playerHands[0]?.length || 0;
-        const totalCards = cardsPerPlayer * players.length;
+        const maxCards = Math.max(...playerHands.map(h => h.length));
+        const totalCards = playerHands.reduce((sum, h) => sum + h.length, 0);
         let dealtCount = 0;
+        let slotIndex = 0;
 
-        for (let round = 0; round < cardsPerPlayer; round++) {
+        for (let round = 0; round < maxCards; round++) {
             players.forEach((player, playerIndex) => {
-                const cardIndex = round * players.length + playerIndex;
                 const cardData = playerHands[playerIndex][round];
-                const positions = this.calculatePositions(player, cardsPerPlayer, CARD_SPACING.OTHER_PLAYERS, CARD_SPACING.LOCAL_PLAYER);
+                if (!cardData) return;               // hand shorter than others
+
+                const handSize = playerHands[playerIndex].length;
+                const positions = this.calculatePositions(player, handSize, CARD_SPACING.OTHER_PLAYERS, CARD_SPACING.LOCAL_PLAYER);
 
                 const targetPos = player.position === 'right'
-                    ? positions[cardsPerPlayer - 1]
+                    ? positions[handSize - 1]
                     : positions[round];
 
-                this.scene.time.delayedCall(cardIndex * ANIMATION.DEAL_DELAY, () => {
+                const delay = slotIndex * ANIMATION.DEAL_DELAY;
+                slotIndex++;
+
+                this.scene.time.delayedCall(delay, () => {
                     if (player.position === 'right' && player.cards.length > 0) {
                         const existingCount = player.cards.length;
                         this.scene.time.delayedCall(200, () => {
                             player.cards.forEach((card, i) => {
-                                const newPos = positions[cardsPerPlayer - 1 - existingCount + i];
+                                const newPos = positions[handSize - 1 - existingCount + i];
                                 this.scene.tweens.add({
                                     targets: card,
                                     x: newPos.x,

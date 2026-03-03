@@ -163,7 +163,13 @@ class DebugCardsResponse(BaseModel):
 
 class StartGameResponse(BaseModel):
     gameState: GameStateSchema
+    dealHands: Optional[list] = Field(None, description="Original hands at deal time (before initial bot turns)")
+    dealStarterCard: Optional[CardSchema] = Field(None, description="Original starter card at deal time")
+    dealActiveColor: Optional[str] = Field(None, description="Original active color at deal time")
+    dealIsClockwise: Optional[bool] = Field(None, description="Original direction at deal time")
+    initialBotTurns: list[BotTurnSchema] = Field([], description="Bot turns that happened before human's first turn")
     botTier: str = Field(..., description="Agent tier used for bots in this game")
+    botMode: str = Field("adaptive", description="Player's bot mode at game start")
     modelInfo: ModelInfoSchema
 
 
@@ -184,3 +190,6 @@ class PassResponse(BaseModel):
 class ActiveGameResponse(BaseModel):
     hasActiveGame: bool = Field(..., description="Whether the player has an in-progress game")
     gameState: Optional[GameStateSchema] = Field(None, description="Full game state if active")
+    botTier: Optional[str] = Field(None, description="Agent tier used for bots in this game")
+    botMode: Optional[str] = Field(None, description="Bot mode the game was started with")
+    nextMode: Optional[str] = Field(None, description="Player's current bot mode setting (may differ from botMode)")

@@ -25,8 +25,10 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create database tables on startup."""
+    """Create database tables and preload models on startup."""
     await create_tables()
+    # Force model loading at startup so first request isn't slow
+    from game.service import _bot_manager  # noqa: F401
     yield
 
 

@@ -6,6 +6,7 @@ a FastAPI dependency for obtaining sessions, and a helper to
 create all tables on startup.
 """
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -41,3 +42,17 @@ async def create_tables():
     """Create all tables defined on Base.metadata (idempotent)."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate(conn)
+
+
+async def _migrate(conn):
+    """Lightweight column migrations for existing databases."""
+    migrations = [
+        ("games", "bot_mode", "VARCHAR(30) DEFAULT 'adaptive'"),
+    ]
+    for table, column, col_def in migrations:
+        exists = await conn.scalar(
+            text(f"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='{column}'")
+        )
+        if not exists:
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"))

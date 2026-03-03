@@ -58,6 +58,7 @@ class Game(Base):
     bot_strength_start = Column(Float, nullable=True)
     bot_strength_end = Column(Float, nullable=True)
     bot_tier = Column(String(30), nullable=True)
+    bot_mode = Column(String(30), default="adaptive", nullable=True)
     player_win_rate_at_game = Column(Float, nullable=True)
     model_version = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)

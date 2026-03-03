@@ -19,6 +19,8 @@ import { ErrorPopup } from '../ui/ErrorPopup.js';
 import { ColorPicker } from '../ui/ColorPicker.js';
 import { ResumeToast } from '../ui/ResumeToast.js';
 import { GameOverOverlay } from '../ui/GameOverOverlay.js';
+import { TierBadge } from '../ui/TierBadge.js';
+import { BotModeSelector } from '../ui/BotModeSelector.js';
 
 export class GameScene extends Phaser.Scene {
     constructor() {
@@ -85,14 +87,28 @@ export class GameScene extends Phaser.Scene {
      * Falls back to normal tap-to-start if no active game or on error.
      */
     async _checkForActiveGame() {
+        // Fetch profile first so we always have the user's botMode
+        if (this.gameAdapter instanceof GameApiAdapter) {
+            try {
+                const profile = await this.gameAdapter.getProfile();
+                if (profile?.stats?.botMode) {
+                    this.gameAdapter.nextMode = profile.stats.botMode;
+                }
+            } catch (_) {}
+        }
+
         try {
             const result = await this.gameAdapter.checkActiveGame();
 
             if (result.hasActiveGame && result.gameState) {
+                // Show badge alongside resume toast
+                const mode = this.gameAdapter.nextMode || this.gameAdapter.botMode || 'adaptive';
+                TierBadge.show(this, null, null, mode, () => this.openBotModeSelector());
+
                 ResumeToast.show(
                     this,
                     () => this.resumeFromServer(result.gameState),
-                    () => this.showTapToStart(),
+                    () => this._showTapToStartWithBadge(),
                 );
                 return;
             }
@@ -100,6 +116,14 @@ export class GameScene extends Phaser.Scene {
             // If check fails, just proceed normally
         }
 
+        this._showTapToStartWithBadge();
+    }
+
+    /** Show tap-to-start screen with the "Next Game" badge. */
+    _showTapToStartWithBadge() {
+        // Show "Next Game" pill so player knows their current setting
+        const mode = this.gameAdapter.nextMode || this.gameAdapter.botMode || 'adaptive';
+        TierBadge.show(this, null, null, mode, () => this.openBotModeSelector());
         this.showTapToStart();
     }
 
@@ -432,19 +456,25 @@ export class GameScene extends Phaser.Scene {
         this.menuPanel = this.add.container(px, py);
         this.menuPanel.setDepth(cfg.DEPTH);
 
+        // Menu items
+        const items = [
+            { label: 'New Game', action: () => this.handleRestart() },
+            ...(this.gameAdapter instanceof GameApiAdapter
+                ? [{ label: 'Bot Mode', action: () => this.openBotModeSelector() }]
+                : []),
+            { label: 'Logout', action: () => this.handleLogout() },
+        ];
+
+        // Dynamic panel height based on item count
+        const panelHeight = itemCfg.PADDING_TOP + items.length * itemCfg.HEIGHT + itemCfg.PADDING_TOP;
+
         // Background
         const bg = this.add.graphics();
         bg.fillStyle(panelCfg.BG_COLOR, panelCfg.BG_ALPHA);
-        bg.fillRoundedRect(0, 0, panelCfg.WIDTH, panelCfg.HEIGHT, panelCfg.CORNER_RADIUS);
+        bg.fillRoundedRect(0, 0, panelCfg.WIDTH, panelHeight, panelCfg.CORNER_RADIUS);
         bg.lineStyle(panelCfg.BORDER_WIDTH, panelCfg.BORDER_COLOR, panelCfg.BORDER_ALPHA);
-        bg.strokeRoundedRect(0, 0, panelCfg.WIDTH, panelCfg.HEIGHT, panelCfg.CORNER_RADIUS);
+        bg.strokeRoundedRect(0, 0, panelCfg.WIDTH, panelHeight, panelCfg.CORNER_RADIUS);
         this.menuPanel.add(bg);
-
-        // Menu items
-        const items = [
-            { label: 'Restart', action: () => this.handleRestart() },
-            { label: 'Logout', action: () => this.handleLogout() },
-        ];
 
         const centerX = panelCfg.WIDTH / 2;
 
@@ -545,6 +575,9 @@ export class GameScene extends Phaser.Scene {
         // This catches CardDealer's untracked delayedCalls, visual deck shuffles, etc.
         GameOverOverlay.forceClear(this);
         ErrorPopup.forceClear(this);
+        TierBadge.forceClear(this);
+        BotModeSelector.forceClear(this);
+        this._currentGameMode = null;
         if (this._debugGameOverBtn) { this._debugGameOverBtn.destroy(); this._debugGameOverBtn = null; }
         this.time.removeAllEvents();
         this.pendingTimers = [];
@@ -654,6 +687,8 @@ export class GameScene extends Phaser.Scene {
 
     handleLogout() {
         this.closeMenu();
+        TierBadge.forceClear(this);
+        BotModeSelector.forceClear(this);
         this.time.removeAllEvents();
         this.pendingTimers = [];
         this.tweens.killAll();
@@ -663,6 +698,20 @@ export class GameScene extends Phaser.Scene {
         ApiClient.clearTokens();
         ApiClient.logout();
         this.scene.start('MainMenuScene');
+    }
+
+    openBotModeSelector() {
+        this.closeMenu();
+        if (!(this.gameAdapter instanceof GameApiAdapter)) return;
+
+        const currentMode = this.gameAdapter.nextMode || this.gameAdapter.botMode || 'adaptive';
+        BotModeSelector.show(this, currentMode, this.gameAdapter, (newMode) => {
+            TierBadge.show(this,
+                this.gameAdapter.botTier || null,
+                this._currentGameMode || null,
+                newMode,
+                () => this.openBotModeSelector());
+        });
     }
 
     setupSystems() {
@@ -734,6 +783,14 @@ export class GameScene extends Phaser.Scene {
         }
 
         this.deckTotal = gameData.deckTotal;
+
+        // Show tier badge (API-backed games only)
+        if (this.gameAdapter instanceof GameApiAdapter && gameData.botTier) {
+            this._currentGameMode = gameData.botMode || 'adaptive';
+            TierBadge.show(this, gameData.botTier, this._currentGameMode, null,
+                () => this.openBotModeSelector());
+        }
+
         this.topCard = gameData.starterCard;
         this.activeColor = gameData.activeColor ?? (gameData.starterCard ? gameData.starterCard.suit : null);
         this.isClockwise = gameData.isClockwise ?? true;
@@ -748,6 +805,14 @@ export class GameScene extends Phaser.Scene {
                 ? hand
                 : Array.from({ length: hand }, () => ({ suit: null, value: 'back' }))
         );
+
+        // Store initial bot turns for post-deal animation
+        this._pendingInitialBotTurns = gameData.initialBotTurns || [];
+        this._postBotFinalState = {
+            topCard: gameData.finalTopCard || gameData.starterCard,
+            activeColor: gameData.finalActiveColor ?? gameData.activeColor,
+            isClockwise: gameData.finalIsClockwise ?? gameData.isClockwise,
+        };
 
         // Shuffle animation, then deal with pre-determined cards
         this.visualDeck.shuffle(() => {
@@ -785,9 +850,29 @@ export class GameScene extends Phaser.Scene {
 
                 // Animate the starter card to center
                 this._animateStarterCard(starterCardData, () => {
-                    this.passButton.enable();
-                    this.enablePlayerTurn();
-                    this._createDebugGameOverButton();
+                    // If bots played before human, animate those turns now
+                    const initialBotTurns = this._pendingInitialBotTurns || [];
+                    this._pendingInitialBotTurns = [];
+
+                    if (initialBotTurns.length > 0) {
+                        this.moveExecutor.executeMoves(initialBotTurns, () => {
+                            // Sync final state after bot turns
+                            const final = this._postBotFinalState;
+                            if (final) {
+                                this.topCard = final.topCard;
+                                this.activeColor = final.activeColor;
+                                this.isClockwise = final.isClockwise;
+                                this.directionArrow.setDirection(this.isClockwise);
+                            }
+                            this.passButton.enable();
+                            this.enablePlayerTurn();
+                            this._createDebugGameOverButton();
+                        });
+                    } else {
+                        this.passButton.enable();
+                        this.enablePlayerTurn();
+                        this._createDebugGameOverButton();
+                    }
                 });
             });
         });
@@ -808,6 +893,15 @@ export class GameScene extends Phaser.Scene {
         if (this.gameAdapter instanceof GameApiAdapter) {
             this.gameAdapter.gameId = gameState.gameId;
             this.gameAdapter._cachedState = gameState;
+
+            // Show tier badge from cached data (populated by checkActiveGame)
+            if (this.gameAdapter.botTier) {
+                this._currentGameMode = this.gameAdapter.botMode || 'adaptive';
+                const nextMode = this.gameAdapter.nextMode || this._currentGameMode;
+                TierBadge.show(this, this.gameAdapter.botTier, this._currentGameMode,
+                    nextMode !== this._currentGameMode ? nextMode : null,
+                    () => this.openBotModeSelector());
+            }
         }
 
         // Set game state from server

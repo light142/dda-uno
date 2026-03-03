@@ -226,10 +226,18 @@ async def create_game(user: User, db: AsyncSession) -> StartGameResponse:
         win_rate, games_played, user.bot_mode, user.target_win_rate,
     )
 
+    # Capture deal state before any bot turns
+    deal_state = session.get_state_for_player(0)
+    deal_hands = deal_state["playerHands"]
+    deal_starter = deal_state["topCard"]
+    deal_color = deal_state["activeColor"]
+    deal_clockwise = deal_state["isClockwise"]
+
     # Run initial bot turns if player 0 doesn't go first
+    initial_bot_turns_raw = []
     if session.current_player != 0:
         decision_fn = _make_decision_fn(tier)
-        session.run_bot_turns(decision_fn)
+        initial_bot_turns_raw = session.run_bot_turns(decision_fn)
 
     # Save game to DB
     manifest = _bot_manager.get_manifest()
@@ -239,6 +247,7 @@ async def create_game(user: User, db: AsyncSession) -> StartGameResponse:
         state_json=json.dumps(session.serialize()),
         turns=session.turns,
         bot_tier=tier,
+        bot_mode=user.bot_mode or "adaptive",
         player_win_rate_at_game=round(win_rate, 4),
         model_version=manifest.get("version", "unknown"),
     )
@@ -249,7 +258,13 @@ async def create_game(user: User, db: AsyncSession) -> StartGameResponse:
     game_state = _build_game_state(game, session)
     return StartGameResponse(
         gameState=game_state,
+        dealHands=deal_hands,
+        dealStarterCard=CardSchema(**deal_starter) if deal_starter else None,
+        dealActiveColor=deal_color,
+        dealIsClockwise=deal_clockwise,
+        initialBotTurns=_build_bot_turns(initial_bot_turns_raw),
         botTier=tier,
+        botMode=user.bot_mode or "adaptive",
         modelInfo=_model_info(),
     )
 
@@ -404,6 +419,9 @@ async def find_active_game(user: User, db: AsyncSession) -> ActiveGameResponse:
     return ActiveGameResponse(
         hasActiveGame=True,
         gameState=_build_game_state(game, session),
+        botTier=game.bot_tier,
+        botMode=game.bot_mode or "adaptive",
+        nextMode=user.bot_mode or "adaptive",
     )
 
 

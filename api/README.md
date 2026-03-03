@@ -119,8 +119,11 @@ api/
 ```bash
 cd api
 pip install -r requirements.txt
-uvicorn main:app --reload
+PYTHONPATH=.. uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+> **Note:** `PYTHONPATH=..` is required so Python can resolve `engine.*` imports
+> from the parent directory.
 
 Or via Docker from the project root:
 

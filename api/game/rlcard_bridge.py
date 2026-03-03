@@ -280,7 +280,7 @@ def encode_game_state(
         "obs": obs,
         "legal_actions": legal,
         "raw_obs": {},
-        "raw_legal_actions": [],
+        "raw_legal_actions": list(legal.keys()),
     }
 
 

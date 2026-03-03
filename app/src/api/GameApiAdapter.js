@@ -11,6 +11,9 @@ export class GameApiAdapter {
     constructor() {
         this.gameId = null;
         this._cachedState = null;
+        this.botTier = null;
+        this.botMode = null;
+        this.nextMode = null;
     }
 
     // ── Game Lifecycle ──────────────────────────────────
@@ -25,16 +28,30 @@ export class GameApiAdapter {
         const res = await ApiClient.post('/api/games');
         this.gameId = res.gameState.gameId;
         this._cachedState = res.gameState;
+        this.botTier = res.botTier || null;
+        this.botMode = res.botMode || null;
 
         const gs = res.gameState;
+        // Use original deal state if bots played before human
+        const hands = res.dealHands || gs.playerHands;
+        const starter = res.dealStarterCard || gs.topCard;
+        const color = res.dealActiveColor ?? gs.activeColor;
+        const clockwise = res.dealIsClockwise ?? gs.isClockwise;
         return {
-            playerHands: gs.playerHands,
-            starterCard: gs.topCard,
-            activeColor: gs.activeColor,
-            isClockwise: gs.isClockwise,
+            playerHands: hands,
+            starterCard: starter,
+            activeColor: color,
+            isClockwise: clockwise,
             deckRemaining: gs.deckRemaining,
             deckTotal: gs.deckRemaining + (gs.discardPile?.length || 0)
-                + this._countAllHands(gs.playerHands),
+                + this._countAllHands(hands),
+            botTier: res.botTier,
+            botMode: res.botMode,
+            initialBotTurns: res.initialBotTurns || [],
+            // Post-bot final state (for after bot turn animation)
+            finalTopCard: gs.topCard,
+            finalActiveColor: gs.activeColor,
+            finalIsClockwise: gs.isClockwise,
         };
     }
 
@@ -110,8 +127,32 @@ export class GameApiAdapter {
         if (res.hasActiveGame && res.gameState) {
             this.gameId = res.gameState.gameId;
             this._cachedState = res.gameState;
+            this.botTier = res.botTier || null;
+            this.botMode = res.botMode || null;
+            this.nextMode = res.nextMode || null;
         }
         return res;
+    }
+
+    /**
+     * Change the player's bot mode (adaptive or a fixed tier).
+     * Maps to: PUT /api/users/me/bot-mode
+     *
+     * @param {string} mode - 'adaptive' or a tier name
+     * @returns {{ botMode: string }}
+     */
+    async setBotMode(mode) {
+        const res = await ApiClient.request('PUT', '/api/users/me/bot-mode', { mode });
+        this.nextMode = res.botMode;
+        return res;
+    }
+
+    /**
+     * Fetch the player's profile (stats, botMode, etc.).
+     * Maps to: GET /api/users/me
+     */
+    async getProfile() {
+        return await ApiClient.get('/api/users/me');
     }
 
     // ── Cached Accessors (same interface as LocalGameSimulator) ──
