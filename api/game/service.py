@@ -19,6 +19,7 @@ from .session import GameSession
 from .bot_manager import BotManager
 from .cards import Card
 from .rlcard_bridge import api_card_to_rlcard
+from engine.game_logic.tiers.tier_config import TIER_SEAT_OVERRIDE
 from .schemas import (
     CardSchema,
     BotTurnSchema,
@@ -92,11 +93,19 @@ def _model_info() -> ModelInfoSchema:
 
 
 def _make_decision_fn(tier: str):
-    """Create a bot decision callback that uses the given tier agent."""
+    """Create a bot decision callback that uses the given tier agent.
+
+    When TIER_SEAT_OVERRIDE applies (e.g. hyper_adversarial), each bot
+    seat may use a different agent tier instead of all using the same one.
+    """
+    seat_override = TIER_SEAT_OVERRIDE.get(tier)
+
     def decide(player_index: int, hand: list[Card],
                top_card: Card, active_color: str, **context):
+        # seats 1-3 map to override indices 0-2
+        bot_tier = seat_override[player_index - 1] if seat_override else tier
         return _bot_manager.get_bot_decision(
-            tier, hand, top_card, active_color, **context)
+            bot_tier, hand, top_card, active_color, **context)
     return decide
 
 

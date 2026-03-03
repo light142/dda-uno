@@ -64,6 +64,43 @@ VOLUNTARY_DRAW_POLICY = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Adaptive controller: variation injection
+# ---------------------------------------------------------------------------
+
+# Per-tier rarity weights for the variation distribution.
+# halt at 0.5x because it's an extreme outlier (+54% deviation from 25% baseline)
+# while all other tiers deviate at most ~8%.
+VARIATION_WEIGHTS = {
+    "hyper_adversarial": 1.0,
+    "adversarial": 1.0,
+    "selfish": 1.0,
+    "random": 1.0,
+    "altruistic": 1.0,
+    "hyper_altruistic": 0.5,
+}
+
+# Max fraction of games that are variation (at error=0, i.e. right on target).
+MAX_VARIATION_RATE = 0.25
+
+# Error magnitude beyond which variation stops entirely (pure deterministic).
+VARIATION_THRESHOLD = 0
+
+# ---------------------------------------------------------------------------
+# Seat configuration overrides
+# ---------------------------------------------------------------------------
+
+# hyper_adversarial was trained with target_seat=2, so seat 2 must be selfish
+# (the "star" that hadv cooperates with). Seats 1,3 use hadv.
+TIER_SEAT_OVERRIDE = {
+    "hyper_adversarial": [
+        "hyper_adversarial",
+        "selfish",
+        "hyper_adversarial",
+    ],
+}
+
+
 def resolve_agent_name(name: str) -> str:
     """Resolve agent name, handling backward compatibility aliases."""
     return AGENT_ALIASES.get(name, name)

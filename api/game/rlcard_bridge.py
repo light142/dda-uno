@@ -148,22 +148,34 @@ def encode_game_state(
     from engine.config.game import STATE_SHAPE, NUM_PLAYERS
     obs = np.zeros(STATE_SHAPE, dtype=int)
 
-    # Plane 0-2: encode hand
+    # Plane 0-2: encode hand (matches RLCard's encode_hand exactly)
+    # Plane 0 = absence plane: starts all-ones, zeroed where cards exist
+    # Plane 1 = 1 copy present (or wild present, any count)
+    # Plane 2 = 2+ copies present
+    obs[0] = np.ones((4, 15), dtype=int)
+
     card_counts: dict[str, int] = {}
     for card in hand:
         key = _card_to_rl_key(card)
         if key:
             card_counts[key] = card_counts.get(key, 0) + 1
 
+    wild_encoded: set[int] = set()
     for key, count in card_counts.items():
         rl_color, rl_trait = key.split("-", 1)
         ci = COLORS.index(rl_color)
         ti = TRAITS.index(rl_trait)
 
         if rl_trait in ("wild", "wild_draw_4"):
-            for c in range(4):
-                obs[min(count, 2)][c][ti] = 1
+            # RLCard encodes wilds once on plane 1 for all 4 colors,
+            # regardless of count (guarded by plane[1][0][trait]==0)
+            if ti not in wild_encoded:
+                wild_encoded.add(ti)
+                for c in range(4):
+                    obs[0][c][ti] = 0
+                    obs[1][c][ti] = 1
         else:
+            obs[0][ci][ti] = 0
             obs[min(count, 2)][ci][ti] = 1
 
     # Plane 3: encode target (top card)

@@ -37,6 +37,7 @@ class GameSession:
         self.current_player = 0
         self.turns = 0
         self._action_log = []  # [(player_id, action_str), ...] mirrors env.action_recorder
+        self._voluntary_draw_counts = {}  # {player_index: count} per game
 
     # ------------------------------------------------------------------
     # Game lifecycle
@@ -246,6 +247,7 @@ class GameSession:
                 "played_cards": game.round.played_cards,
                 "deck_remaining": len(game.dealer.deck),
                 "action_log": self._action_log,
+                "voluntary_draw_count": self._voluntary_draw_counts.get(p, 0),
             }
 
             card, chosen_color = bot_decision_fn(
@@ -296,6 +298,13 @@ class GameSession:
                 self.current_player = game.round.current_player
 
             else:
+                # Track voluntary draw (had playable cards but chose draw)
+                playable = get_playable_cards(hand_cards, top_card, active_color)
+                if playable:
+                    self._voluntary_draw_counts[p] = (
+                        self._voluntary_draw_counts.get(p, 0) + 1
+                    )
+
                 # Bot draws — RLCard may auto-play the drawn card if it
                 # matches the target color or is wild.  We detect this by
                 # comparing the target object before / after the step.
@@ -417,6 +426,7 @@ class GameSession:
             "current_player": self.current_player,
             "turns": self.turns,
             "action_log": self._action_log,
+            "voluntary_draw_counts": self._voluntary_draw_counts,
         }
 
     @classmethod
@@ -468,6 +478,11 @@ class GameSession:
         session._action_log = [
             tuple(rec) for rec in data.get("action_log", [])
         ]
+        # Restore voluntary draw counts (keys stored as strings in JSON)
+        raw_vdc = data.get("voluntary_draw_counts", {})
+        session._voluntary_draw_counts = {
+            int(k): v for k, v in raw_vdc.items()
+        }
 
         return session
 

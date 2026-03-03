@@ -18,6 +18,7 @@ from engine.game_logic.tiers.tier_config import (
     DQN_TIERS,
     MIXABLE_TIERS,
     VOLUNTARY_DRAW_POLICY,
+    TIER_SEAT_OVERRIDE,
     resolve_agent_name,
 )
 from engine.game_logic.tiers.tier_pool import (

@@ -63,12 +63,13 @@ class BotManager:
     def get_target_seat_for_tier(self, tier: str) -> Optional[int]:
         """Get the target seat for a tier (for plane 11).
 
-        In live play, all targeted tiers point at seat 0 (the human):
-          - altruistic/hyper_altruistic: help seat 0 (fixed in training)
-          - hyper_adversarial: target seat 0 (the human player)
+        Uses FIXED_TARGET values matching training:
+          - altruistic/hyper_altruistic: help seat 0 (trained that way)
+          - hyper_adversarial: cooperate with seat 2 (trained with
+            selfish star at seat 2, so hadv hurts seat 0 indirectly)
 
         Returns:
-            0 for tiers that need a target, None otherwise.
+            Fixed target seat, or None for tiers that don't need one.
         """
         if tier in FIXED_TARGET:
             return FIXED_TARGET[tier]
@@ -104,7 +105,11 @@ class BotManager:
 
         target_seat = self.get_target_seat_for_tier(tier)
         context.setdefault('target_seat', target_seat)
-        context.setdefault('allow_voluntary_draw', False)
+
+        # Voluntary draw: allow if tier policy permits and cap not reached
+        vd_cap = self.get_voluntary_draw_cap(tier)
+        vd_count = context.pop('voluntary_draw_count', 0)
+        context.setdefault('allow_voluntary_draw', vd_cap > 0 and vd_count < vd_cap)
 
         state = encode_game_state(hand, top_card, active_color, **context)
         action_id, _ = agent.eval_step(state)
