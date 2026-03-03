@@ -66,7 +66,7 @@ simulator/models/**/*.pth
 engine/data/*.json
 engine/data/*.csv
 engine/data/*.db
-simulator/data/*.json
+# simulator/data/*.json
 simulator/data/*.csv
 
 # Keep directory structure with .gitkeep
