@@ -17,8 +17,8 @@ Usage:
     # Altruistic helping seat 0
     python -m simulator.simulation.simulate --s0 casual --s1 altruistic --s2 altruistic --s3 altruistic --target 0
 
-    # Hyper-adversarial helping seat 2
-    python -m simulator.simulation.simulate --s0 random --s1 hyper_adversarial --s2 selfish --s3 hyper_adversarial --target 2
+    # Hyper-adversarial helping seat 2 (target auto-set to seat 2)
+    python -m simulator.simulation.simulate --s0 random --s1 hyper_adversarial --s2 selfish --s3 hyper_adversarial
 
     # All 125 combos for seats 1-3 against rule-v1
     python -m simulator.simulation.simulate --s0 rule-v1 --all --target 0 --games 200
@@ -85,6 +85,15 @@ def _build_plot_path(seats, games, data_dir):
     return os.path.join(data_dir, f"sim_{'_'.join(parts)}_{games}g_stats.png")
 
 
+def _build_results_path(seats, games, data_dir):
+    """Build a descriptive results filename from seat agents.
+
+    Format: sim_{s0}_{s1}_{s2}_{s3}_{games}g_results.json
+    """
+    parts = [_short(s) for s in seats]
+    return os.path.join(data_dir, f"sim_{'_'.join(parts)}_{games}g_results.json")
+
+
 def _safe_save_path(path):
     """If path already exists, rename the old file with a timestamp suffix."""
     if os.path.exists(path):
@@ -96,9 +105,10 @@ def _safe_save_path(path):
 
 
 def needs_cli_target(agents: list) -> bool:
-    """Check if any agent needs --target from CLI (hyper_adversarial only).
+    """Check if any agent needs --target from CLI.
 
-    Altruistic/hyper_altruistic have fixed targets (seat 0) and don't need CLI input.
+    Agents in FIXED_TARGET (altruistic→0, hyper_altruistic→0,
+    hyper_adversarial→2) are auto-configured and don't need CLI input.
     """
     return any(a in TARGET_SEAT_TIERS and a not in FIXED_TARGET for a in agents)
 
@@ -107,7 +117,7 @@ def build_target_dict(seats, cli_target):
     """Build per-seat target dict from agent types and CLI --target.
 
     - altruistic/hyper_altruistic → always 0 (hardcoded)
-    - hyper_adversarial → uses cli_target
+    - hyper_adversarial → always 2 (hardcoded, trained with selfish star at seat 2)
     - everything else → None
     """
     targets = {}
@@ -145,7 +155,7 @@ def run_combo(game, pool, seats, cli_target, num_games, show_progress=False,
     agents = [pool.get(seats[i]) for i in range(NUM_PLAYERS)]
     game.set_agents(agents)
 
-    # Per-seat targets: altruistic/hyper_alt → 0, hyper_adversarial → cli_target, rest → None
+    # Per-seat targets: altruistic/hyper_alt → 0, hyper_adversarial → 2, rest → None
     game.set_target_seat(build_target_dict(seats, cli_target))
 
     # Set per-seat voluntary draw caps matching training policy
@@ -201,11 +211,9 @@ def run_single(args):
     seats = [resolve_agent_name(a) for a in [args.s0, args.s1, args.s2, args.s3]]
     target_seat = args.target
 
-    # Validate: only hyper_adversarial needs --target from CLI
+    # Validate: check if any agent needs --target from CLI
     if needs_cli_target(seats) and target_seat is None:
-        print("ERROR: Using hyper_adversarial agents requires --target N")
-        print("  Example: --target 2  (hyper_adversarial bots help seat 2 win)")
-        print("  Note: altruistic/hyper_altruistic always target seat 0 automatically.")
+        print("ERROR: Some agents require --target N to set plane 11")
         sys.exit(1)
 
     print()
@@ -279,8 +287,7 @@ def run_all_combos(args):
     # Check if any mixable tier needs --target from CLI
     needs_target = any(t in TARGET_SEAT_TIERS and t not in FIXED_TARGET for t in tiers)
     if needs_target and target_seat is None:
-        print("ERROR: Mixable tiers include hyper_adversarial which requires --target N")
-        print("  Example: --target 2  (hyper_adversarial bots help seat 2 win)")
+        print("ERROR: Some mixable tiers require --target N to set plane 11")
         sys.exit(1)
 
     print()
@@ -524,7 +531,7 @@ def main():
 
     parser.add_argument(
         '--target', type=int, default=None, choices=[0, 1, 2, 3],
-        help='Target seat for hyper_adversarial/altruistic agents (plane 11)',
+        help='Target seat override for plane 11 (altruistic→0, hyper_adversarial→2 are auto-set)',
     )
     parser.add_argument(
         '--all', action='store_true',
@@ -573,10 +580,17 @@ def main():
         output = run_single(args)
 
     # Save results
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
-    with open(args.output, 'w') as f:
+    if not args.adaptive and not args.all and not args.baseline:
+        # Single combo: descriptive filename like plots
+        seats = [resolve_agent_name(a) for a in [args.s0, args.s1, args.s2, args.s3]]
+        save_path = _build_results_path(seats, args.games, DATA_DIR)
+    else:
+        save_path = args.output
+    _safe_save_path(save_path)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    with open(save_path, 'w') as f:
         json.dump(output, f, indent=2)
-    print(f"\nResults saved to {args.output}")
+    print(f"\nResults saved to {save_path}")
 
 
 if __name__ == "__main__":

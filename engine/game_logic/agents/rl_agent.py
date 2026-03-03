@@ -1,6 +1,7 @@
 """DQN-based RL agent wrapping RLCard's DQNAgent with custom reward support."""
 
 import os
+import numpy as np
 import torch
 from rlcard.agents import DQNAgent
 
@@ -35,6 +36,7 @@ class RLAgent(BaseAgent):
 
         if model_path and os.path.exists(model_path):
             checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+            self._fix_checkpoint_epsilon(checkpoint)
             self._agent = DQNAgent.from_checkpoint(checkpoint)
         else:
             self._agent = DQNAgent(
@@ -57,6 +59,20 @@ class RLAgent(BaseAgent):
             )
 
         self.use_raw = self._agent.use_raw
+
+    @staticmethod
+    def _fix_checkpoint_epsilon(checkpoint):
+        """Fix RLCard's epsilon save bug.
+
+        RLCard's checkpoint_attributes() uses epsilons.min()/max() which
+        swaps start and end for a decreasing schedule. This corrects the
+        checkpoint in-place so from_checkpoint rebuilds the right schedule.
+        """
+        eps_start = checkpoint.get('epsilon_start')
+        eps_end = checkpoint.get('epsilon_end')
+        if eps_start is not None and eps_end is not None and eps_start < eps_end:
+            checkpoint['epsilon_start'] = eps_end
+            checkpoint['epsilon_end'] = eps_start
 
     def step(self, state: dict) -> int:
         """Choose action with epsilon-greedy exploration (training mode)."""
@@ -88,6 +104,7 @@ class RLAgent(BaseAgent):
             device: PyTorch device to load onto.
         """
         checkpoint = torch.load(filepath, map_location=device)
+        self._fix_checkpoint_epsilon(checkpoint)
         self._agent = DQNAgent.from_checkpoint(checkpoint)
         self.use_raw = self._agent.use_raw
 

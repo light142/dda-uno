@@ -179,7 +179,11 @@ def count_voluntary_draws(trajectories, seat):
 
 def reorganize_with_shaping(trajectories, seat, base_reward, target_seat,
                             vd_penalty=0.0, target_hit_penalty=0.0,
-                            opponent_hit_bonus=0.0):
+                            opponent_hit_bonus=0.0, opponent_seat=None,
+                            friendly_hit_penalty=0.0,
+                            danger_opponent_bonus=0.0,
+                            strategic_pass_bonus=0.0,
+                            self_vd_penalty=0.0):
     """Reorganize trajectory with per-step reward shaping.
 
     Supports voluntary draw penalties and action card shaping. The base
@@ -190,10 +194,19 @@ def reorganize_with_shaping(trajectories, seat, base_reward, target_seat,
         trajectories: Raw per-seat trajectory lists from run_game().
         seat: Seat index to extract transitions for.
         base_reward: Game outcome reward for the terminal step.
-        target_seat: The seat this agent should help (e.g. PLAYER_SEAT=0).
+        target_seat: The seat this agent should help (e.g. star seat).
         vd_penalty: Per-step penalty for voluntary draws (0.0 to disable).
         target_hit_penalty: Penalty for playing offensive cards on target.
-        opponent_hit_bonus: Bonus for playing offensive cards on opponents.
+        opponent_hit_bonus: Bonus for playing offensive cards on opponent.
+        opponent_seat: The seat to attack (e.g. PLAYER_SEAT=0). If None,
+            any non-target seat gets opponent_hit_bonus (legacy behavior).
+        friendly_hit_penalty: Penalty for hitting a friendly support bot.
+        danger_opponent_bonus: Boosted bonus when hitting opponent with <=3
+            cards (urgent block). 0.0 disables (falls back to opponent_hit_bonus).
+        strategic_pass_bonus: Reward for voluntary draw when target_seat is
+            next and has <=2 cards (let them win). 0.0 disables.
+        self_vd_penalty: Extra penalty for VD when own hand <=2 cards
+            (don't draw when you're about to win). 0.0 disables.
 
     Returns:
         List of [state, action, reward, next_state, done] transitions.
@@ -210,13 +223,38 @@ def reorganize_with_shaping(trajectories, seat, base_reward, target_seat,
         if is_terminal:
             reward = base_reward
         elif action == DRAW_ACTION_ID and len(state['legal_actions']) > 1:
-            reward = vd_penalty
+            # Never VD when own hand is <=2 cards (you're close to winning)
+            own_cards = state['obs'][5, seat, 0]
+            if self_vd_penalty and own_cards <= 2:
+                reward = self_vd_penalty
+            # Strategic pass: reward VD only when star is next and about to win
+            elif strategic_pass_bonus and target_seat is not None:
+                next_player = int(state['obs'][6, :, 0].argmax())
+                target_cards = state['obs'][5, target_seat, 0]
+                if next_player == target_seat and target_cards <= 2:
+                    reward = strategic_pass_bonus
+                else:
+                    reward = vd_penalty
+            else:
+                reward = vd_penalty
         elif action in OFFENSIVE_ACTION_IDS:
             next_player = int(state['obs'][6, :, 0].argmax())
             if next_player == target_seat:
                 reward = target_hit_penalty
+            elif opponent_seat is not None and next_player == opponent_seat:
+                # Danger-aware: boost bonus when opponent is close to winning
+                if danger_opponent_bonus:
+                    opp_cards = state['obs'][5, opponent_seat, 0]
+                    if opp_cards <= 3:
+                        reward = danger_opponent_bonus
+                    else:
+                        reward = opponent_hit_bonus
+                else:
+                    reward = opponent_hit_bonus
+            elif opponent_seat is not None:
+                reward = friendly_hit_penalty
             else:
-                reward = opponent_hit_bonus
+                reward = opponent_hit_bonus  # legacy: no opponent_seat
         else:
             reward = 0.0
 

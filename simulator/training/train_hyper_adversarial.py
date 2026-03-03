@@ -35,7 +35,9 @@ from simulator.config.training import (
     REPLAY_MEMORY_SIZE,
 )
 from simulator.config.tiers import VOLUNTARY_DRAW_POLICY
-from simulator.training.opponents import create_opponent_pool, pick_opponent
+from simulator.training.opponents import (
+    create_opponent_pool, pick_opponent, try_load_selfish_checkpoint,
+)
 from simulator.training.metrics import (
     TrainingLogger, count_voluntary_draws, get_dqn_metrics,
     print_eval_header, print_eval_metrics, patch_dqn_loss_tracking,
@@ -44,22 +46,26 @@ from simulator.training.metrics import (
 
 HYPER_ADVERSARIAL_DIR = os.path.join(MODEL_DIR, "hyper_adversarial")
 
-# Cooperative reward (for support seats)
-TARGET_WIN_REWARD = 2.0     # Star seat wins — mission accomplished
-BOT_WIN_REWARD = 1.0        # Another bot wins — team still beat seat 0
-SEAT0_WIN_PENALTY = -2.0    # Seat 0 wins — catastrophic
+# Terminal rewards (dominant — these drive the learning goal)
+TARGET_WIN_REWARD = 5.0      # Star seat wins — mission accomplished
+BOT_WIN_REWARD = 2.0         # Another bot wins — team still beat seat 0
+SEAT0_WIN_PENALTY = -10.0    # Seat 0 wins — catastrophic
 
-# Per-step reward shaping (for support seats)
-TARGET_HIT_PENALTY = -1.0   # strong penalty for skip/draw-2/wild+4 on star seat
-OPPONENT_HIT_BONUS = 0.5    # bonus for skip/draw-2/wild+4 on seat 0 or others
-PASS_PENALTY = -1         # per-step penalty for voluntary draws (strategic passing)
-SUPPORT_VD_CAP = 5          # voluntary draw cap for support bots
+# Per-step reward shaping (guidance — ~3-4 shaped steps accumulate ~3-5 vs terminal 5-10)
+TARGET_HIT_PENALTY = -0.8    # penalty for skip/draw-2/wild+4 on star seat
+OPPONENT_HIT_BONUS = 0.6     # bonus for skip/draw-2/wild+4 on seat 0
+DANGER_OPPONENT_BONUS = 1.2  # boosted bonus when seat 0 has <=3 cards (urgent block)
+FRIENDLY_HIT_PENALTY = -0.4  # penalty for hitting the other support bot
 
-# Opponent weights for seat 0 (bias toward strong)
+# Opponent weights for seat 0 (heavy bias toward strong)
 OPPONENT_WEIGHTS = {
-    "random": 15, "rule-v1": 25, "noob": 15,
-    "casual": 20, "pro": 25,
+    "random": 5, "rule-v1": 30, "noob": 5,
+    "casual": 25, "pro": 35,
 }
+
+# Self-play: add selfish checkpoint to opponent pool mid-training
+SELF_PLAY_START = 0.20
+SELF_PLAY_REFRESH_PCT = 0.05
 
 
 def cooperative_reward(payoffs, seat, target_seat):
@@ -83,10 +89,20 @@ def cooperative_reward(payoffs, seat, target_seat):
         return BOT_WIN_REWARD
 
 
-def pick_weighted_opponent(pool):
-    """Pick opponent with hyper-adversarial weighting."""
+def pick_weighted_opponent(pool, selfish_entry=None):
+    """Pick opponent with hyper-adversarial weighting.
+
+    Args:
+        pool: List of (name, agent, vd_cap) tuples.
+        selfish_entry: Optional (agent, vd_cap) from try_load_selfish_checkpoint().
+    """
+    candidates = list(pool)
     weights = [OPPONENT_WEIGHTS.get(name, 15) for name, _, _ in pool]
-    return random.choices(pool, weights=weights, k=1)[0]
+    if selfish_entry is not None:
+        agent, vd_cap = selfish_entry
+        candidates.append(("selfish-ckpt", agent, vd_cap))
+        weights.append(30)  # strong weight for trained DQN opponent
+    return random.choices(candidates, weights=weights, k=1)[0]
 
 
 def evaluate(game, selfish_agent, coop_agent, pool, num_games):
@@ -108,10 +124,7 @@ def evaluate(game, selfish_agent, coop_agent, pool, num_games):
             agents[seat] = coop_agent.agent
 
         game.set_agents(agents)
-        vd_caps = {0: seat0_vd, star_seat: 0}
-        for seat in support_seats:
-            vd_caps[seat] = SUPPORT_VD_CAP
-        game.set_max_voluntary_draws(vd_caps)
+        game.set_max_voluntary_draws({0: seat0_vd, 1: 0, 2: 0, 3: 0})
         game.set_target_seat(star_seat)
 
         result = game.run_game(is_training=False)
@@ -160,9 +173,9 @@ def find_latest_checkpoint(checkpoint_dir):
     return best_path, best_ep
 
 
-def train(fresh=False, test=False):
+def train(fresh=False, test=False, episodes=None):
     """Main training loop for hyper-adversarial (cooperative support) agent."""
-    num_episodes = 200 if test else NUM_EPISODES
+    num_episodes = 200 if test else (episodes or NUM_EPISODES)
     eval_every = 50 if test else EVAL_EVERY
     save_every = 100 if test else SAVE_EVERY
     eval_num_games = 20 if test else EVAL_NUM_GAMES
@@ -171,7 +184,6 @@ def train(fresh=False, test=False):
     selfish_path = os.path.join(MODEL_DIR, "selfish", "selfish_agent.pt")
     if not os.path.exists(selfish_path):
         # Try latest checkpoint
-        from simulator.training.opponents import try_load_selfish_checkpoint
         entry = try_load_selfish_checkpoint(MODEL_DIR)
         if entry is None:
             print("ERROR: No selfish agent found. Train selfish first (Phase 1).")
@@ -200,9 +212,11 @@ def train(fresh=False, test=False):
     print("=" * 60)
     print(f"  Star agent      : frozen selfish_agent.pt (fixed seat 2)")
     print(f"  Support reward  : +{TARGET_WIN_REWARD} star, +{BOT_WIN_REWARD} bot, {SEAT0_WIN_PENALTY} seat0")
-    print(f"  Action shaping  : {TARGET_HIT_PENALTY} hit star, +{OPPONENT_HIT_BONUS} hit opponent")
-    print(f"  Voluntary draw  : ENABLED for support (cap={SUPPORT_VD_CAP}, penalty={PASS_PENALTY}/step)")
-    print(f"  Opponent pool   : {OPPONENT_POOL} (weighted strong)")
+    print(f"  Action shaping  : {TARGET_HIT_PENALTY} hit star, +{OPPONENT_HIT_BONUS} hit seat0, {FRIENDLY_HIT_PENALTY} hit friendly")
+    print(f"  Danger bonus    : +{DANGER_OPPONENT_BONUS} when seat0 <=3 cards")
+    print(f"  Voluntary draw  : DISABLED (cap=0)")
+    print(f"  Opponent pool   : {OPPONENT_POOL} (heavy strong bias)")
+    print(f"  Self-play       : selfish checkpoint after {SELF_PLAY_START:.0%}")
     print(f"  Network         : [256, 256]")
     print(f"  Episodes        : {start_episode:,} -> {num_episodes:,}")
     if test:
@@ -234,9 +248,25 @@ def train(fresh=False, test=False):
     star_seat = 2
     support_seats = [1, 3]
 
+    # Self-play state
+    selfish_entry = None
+    self_play_start = int(num_episodes * SELF_PLAY_START)
+    self_play_refresh = max(1, int(num_episodes * SELF_PLAY_REFRESH_PCT))
+
     for episode in range(start_episode, num_episodes + 1):
-        # Pick seat 0 opponent
-        name, seat0_agent, seat0_vd = pick_weighted_opponent(pool)
+        # Self-play: load selfish checkpoints as seat 0 opponent after threshold
+        if episode >= self_play_start and episode % self_play_refresh == 0:
+            new_entry = try_load_selfish_checkpoint(MODEL_DIR)
+            if new_entry:
+                if selfish_entry is None:
+                    print(f"  + Self-play enabled: selfish checkpoint at seat 0")
+                else:
+                    print(f"  + Self-play checkpoint refreshed")
+                selfish_entry = new_entry
+
+        # Pick seat 0 opponent (with self-play candidate)
+        name, seat0_agent, seat0_vd = pick_weighted_opponent(
+            pool, selfish_entry)
 
         # Assign agents
         agents = [None] * NUM_PLAYERS
@@ -247,26 +277,25 @@ def train(fresh=False, test=False):
 
         game.set_agents(agents)
 
-        # VD caps: star gets 0 (selfish trained without VD), support gets strategic VD
-        vd_caps = {0: seat0_vd, star_seat: 0}
-        for seat in support_seats:
-            vd_caps[seat] = SUPPORT_VD_CAP
-        game.set_max_voluntary_draws(vd_caps)
+        # No VD for any bot
+        game.set_max_voluntary_draws({0: seat0_vd, 1: 0, 2: 0, 3: 0})
 
         # Set target seat for cooperative plane 11
         game.set_target_seat(star_seat)
 
         result = game.run_game(is_training=True)
 
-        # Feed cooperative reward with per-step shaping (VD + action cards)
+        # Feed cooperative reward with per-step action card shaping
         for seat in support_seats:
             base_reward = cooperative_reward(result['payoffs'], seat, star_seat)
             transitions = reorganize_with_shaping(
                 result['trajectories'], seat, base_reward,
                 target_seat=star_seat,
-                vd_penalty=PASS_PENALTY,
+                opponent_seat=PLAYER_SEAT,
                 target_hit_penalty=TARGET_HIT_PENALTY,
                 opponent_hit_bonus=OPPONENT_HIT_BONUS,
+                friendly_hit_penalty=FRIENDLY_HIT_PENALTY,
+                danger_opponent_bonus=DANGER_OPPONENT_BONUS,
             )
             for transition in transitions:
                 coop_agent.feed(transition)
@@ -321,5 +350,7 @@ if __name__ == "__main__":
                         help='Start training from scratch, ignoring checkpoints')
     parser.add_argument('--test', action='store_true',
                         help='Smoke test: 200 episodes with fast eval')
+    parser.add_argument('--episodes', type=int, default=None,
+                        help='Override total episodes (default: 100k). Resumes from last checkpoint.')
     args = parser.parse_args()
-    train(fresh=args.fresh, test=args.test)
+    train(fresh=args.fresh, test=args.test, episodes=args.episodes)

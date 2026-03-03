@@ -32,12 +32,13 @@ AGENT_ALIASES = {
 # Tiers that need target_seat set (plane 11) to function properly
 TARGET_SEAT_TIERS = {"altruistic", "hyper_altruistic", "hyper_adversarial"}
 
-# Fixed target seat per agent type (None = needs explicit target)
+# Fixed target seat per agent type
 # altruistic/hyper_altruistic always help seat 0 (trained that way)
-# hyper_adversarial needs explicit target (trained with rotating targets)
+# hyper_adversarial always helps seat 2 (trained with selfish star at seat 2)
 FIXED_TARGET = {
     "altruistic": 0,
     "hyper_altruistic": 0,
+    "hyper_adversarial": 2,
 }
 
 # DQN-trained tiers (need model loading)
