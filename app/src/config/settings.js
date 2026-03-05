@@ -1,5 +1,5 @@
 // API base URL — set to your backend in production
-export const API_BASE_URL = 'https://dda-uno-api.onrender.com';
+export const API_BASE_URL = 'https://light142-dda-uno-api.hf.space';
 
 export const SEAT_POSITIONS = [
     { position: 'bottom', x: 250, y: 600 },
