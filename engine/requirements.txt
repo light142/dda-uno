@@ -1,3 +1,0 @@
-rlcard[torch]
-torch
-numpy

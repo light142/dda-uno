@@ -1,0 +1,6 @@
+[submodule "engine"]
+	path = engine
+	url = https://github.com/light142/dda-uno-engine.git
+[submodule "api"]
+	path = api
+	url = https://github.com/light142/dda-uno-api.git
