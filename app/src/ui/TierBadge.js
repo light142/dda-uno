@@ -1,8 +1,8 @@
 import { TIER_BADGE } from '../config/settings.js';
 
 const TIER_DISPLAY = {
-    'hyper_adversarial': 'Hyper Aversarial',
-    'adversarial':       'Aversarial',
+    'hyper_adversarial': 'Hyper Adversarial',
+    'adversarial':       'Adversarial',
     'selfish':           'Selfish',
     'random':            'Random',
     'altruistic':        'Altruistic',

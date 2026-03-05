@@ -50,7 +50,16 @@ export class MoveExecutor {
         }
 
         const move = moveset[index];
-        const delay = index === 0 ? BOT_TURN.THINK_DELAY : BOT_TURN.BETWEEN_BOTS;
+
+        // Check if this play follows a draw by the same player (auto-play after draw)
+        const prevMove = index > 0 ? moveset[index - 1] : null;
+        const justDrawn = prevMove
+            && prevMove.action === 'draw'
+            && prevMove.playerIndex === move.playerIndex
+            && move.action === 'play';
+
+        // Shorter delay for auto-play after draw — card is already in hand
+        const delay = justDrawn ? 0 : (index === 0 ? BOT_TURN.THINK_DELAY : BOT_TURN.BETWEEN_BOTS);
 
         this.scene.scheduleTimer(delay, () => {
             if (!this.isExecuting) { onComplete(); return; }
@@ -59,7 +68,7 @@ export class MoveExecutor {
 
             switch (move.action) {
                 case 'play':
-                    this._executePlayMove(move, null, advance);
+                    this._executePlayMove(move, null, advance, justDrawn);
                     break;
                 case 'draw':
                     this._executeDrawMove(move, advance);
@@ -76,7 +85,7 @@ export class MoveExecutor {
      * @param {Function} onFullyDone  - fires after secondary animations (reverse arrow)
      * @private
      */
-    _executePlayMove(move, onCardLanded, onFullyDone) {
+    _executePlayMove(move, onCardLanded, onFullyDone, justDrawn = false) {
         const player = this.scene.playerManager.getPlayer(move.playerIndex);
         if (!player || player.cards.length === 0) {
             if (onCardLanded) onCardLanded();
@@ -84,31 +93,42 @@ export class MoveExecutor {
             return;
         }
 
-        const card = this._findCardInHand(player, move.card);
+        const card = this._findCardInHand(player, move.card, justDrawn);
         if (!card) {
             if (onCardLanded) onCardLanded();
             if (onFullyDone) onFullyDone();
             return;
         }
 
-        // 1. Lift card from hand
-        this.scene.tweens.add({
-            targets: card,
-            y: card.y - BOT_TURN.LIFT_OFFSET,
-            duration: BOT_TURN.LIFT_DURATION,
-            ease: 'Quad.easeOut',
-            onComplete: () => {
-                // 2. Flip face-up
-                this.scene.scheduleTimer(BOT_TURN.LIFT_TO_FLIP_DELAY, () => {
-                    card.flip(() => {
-                        // 3. Fly to center
-                        this.scene.scheduleTimer(BOT_TURN.FLIP_TO_FLY_DELAY, () => {
-                            this._playCardToCenter(card, player, move, onCardLanded, onFullyDone);
+        const flipToFly = BOT_TURN.FLIP_TO_FLY_DELAY;
+
+        if (justDrawn) {
+            // Skip lift (card just arrived) — flip immediately then fly
+            card.flip(() => {
+                this.scene.scheduleTimer(flipToFly, () => {
+                    this._playCardToCenter(card, player, move, onCardLanded, onFullyDone);
+                });
+            });
+        } else {
+            // 1. Lift card from hand
+            this.scene.tweens.add({
+                targets: card,
+                y: card.y - BOT_TURN.LIFT_OFFSET,
+                duration: BOT_TURN.LIFT_DURATION,
+                ease: 'Quad.easeOut',
+                onComplete: () => {
+                    // 2. Flip face-up
+                    this.scene.scheduleTimer(BOT_TURN.LIFT_TO_FLIP_DELAY, () => {
+                        card.flip(() => {
+                            // 3. Fly to center
+                            this.scene.scheduleTimer(flipToFly, () => {
+                                this._playCardToCenter(card, player, move, onCardLanded, onFullyDone);
+                            });
                         });
                     });
-                });
-            }
-        });
+                }
+            });
+        }
     }
 
     /**
@@ -287,21 +307,25 @@ export class MoveExecutor {
 
     /**
      * Find a Card entity in a player's hand matching suit+value.
-     * For face-down bot cards, picks any card and updates its identity.
+     * For face-down bot cards, picks a random card (or the last one if justDrawn).
+     * @param {boolean} justDrawn - if true, pick the most recently added card (auto-play after draw)
      * @private
      */
-    _findCardInHand(player, cardData) {
+    _findCardInHand(player, cardData, justDrawn = false) {
         // Exact match (local player cards or cards with known data)
         const exact = player.cards.find(c =>
             c.suit === cardData.suit && c.value === cardData.value
         );
         if (exact) return exact;
 
-        // Face-down card (bot): pick any and update its identity for the flip
-        const faceDown = player.cards.find(c => !c.isFaceUp);
-        if (faceDown) {
-            faceDown.updateCardData(cardData.suit, cardData.value);
-            return faceDown;
+        // Face-down card (bot)
+        const faceDownCards = player.cards.filter(c => !c.isFaceUp);
+        if (faceDownCards.length > 0) {
+            const picked = justDrawn
+                ? faceDownCards[faceDownCards.length - 1]
+                : faceDownCards[Math.floor(((Math.random() + Math.random()) / 2) * faceDownCards.length)];
+            picked.updateCardData(cardData.suit, cardData.value);
+            return picked;
         }
 
         return player.cards[0] || null;

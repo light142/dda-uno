@@ -1562,6 +1562,11 @@ export class GameScene extends Phaser.Scene {
             chosenColor = await ColorPicker.show(this, cardData.value);
         }
 
+        // ── Fire API in parallel with animations ──
+        const apiPromise = this.gameAdapter.playerPlay(cardData, chosenColor)
+            .then(result => ({ result }))
+            .catch(err => ({ err }));
+
         if (!isWinningCard && player.cards.length === 1 && player.isLocal) {
             this.unoButton.enable();
         }
@@ -1597,68 +1602,21 @@ export class GameScene extends Phaser.Scene {
             await this._animateColorReplacement(card, cardData.value, chosenColor);
         }
 
-        try {
-            const result = await this.gameAdapter.playerPlay(cardData, chosenColor);
+        // Optimistic reverse: toggle arrow immediately, don't wait for API
+        if (!isWinningCard && effect.type === 'reverse') {
+            this.isClockwise = !this.isClockwise;
+            this.directionArrow.toggle();
+        }
 
-            if (!result.valid) {
-                if (this._isStateDesynced(result)) {
-                    // Don't reverse the card — resync will destroy all cards and rebuild
-                    ErrorPopup.show(this, 'Cards out of sync! Refreshing...');
-                    this._resyncFromServer(result);
-                } else {
-                    this._reversePlayedCard(card, player);
-                    ErrorPopup.show(this, "Nice try! That card doesn't match.");
-                    this.enablePlayerTurn();
-                }
-                return;
-            }
+        // ── Now await API result ──
+        const { result, err } = await apiPromise;
 
-            // Winning card — go straight to game over, skip all post-play effects
-            if (isWinningCard) {
-                this._handleGameOver(result.winner ?? 0);
-                return;
-            }
-
-            // Sync state from response
-            this.topCard = result.topCard;
-            this.activeColor = result.activeColor;
-
-            // Process bot turns with effects
-            const botTurns = result.botTurns;
-
-            const proceedAfterEffect = () => {
-                if (player.cards.length === 0) {
-                    this._handleGameOver(result.winner ?? 0);
-                    return;
-                }
-
-                const continueWithBotTurns = () => {
-                    this.scheduleTimer(400, () => {
-                        this.moveExecutor.executeMoves(botTurns, () => {
-                            this.syncState();
-                            this._checkBotWin(result);
-                            this.enablePlayerTurn();
-                        });
-                    });
-                };
-
-                if (result.reshuffled) {
-                    this._animateReshuffle(result.deckCountAfterReshuffle).then(continueWithBotTurns);
-                } else {
-                    continueWithBotTurns();
-                }
-            };
-
-            if (effect.type === 'reverse') {
-                // Toggle locally for the player's reverse; bot reverses handled by MoveExecutor.
-                // syncState() at the end will set the final server value.
+        if (err) {
+            // Undo optimistic reverse
+            if (!isWinningCard && effect.type === 'reverse') {
                 this.isClockwise = !this.isClockwise;
-                this.directionArrow.toggle(() => proceedAfterEffect());
-            } else {
-                proceedAfterEffect();
+                this.directionArrow.toggle();
             }
-        } catch (err) {
-            // Game no longer exists (abandoned/finished) — try to resync to active game
             if (err.status === 400 || err.status === 404) {
                 this._recoverStaleGame();
                 return;
@@ -1666,6 +1624,53 @@ export class GameScene extends Phaser.Scene {
             this._reversePlayedCard(card, player);
             ErrorPopup.show(this, ErrorPopup.friendlyMessage(err));
             this.enablePlayerTurn();
+            return;
+        }
+
+        if (!result.valid) {
+            // Undo optimistic reverse
+            if (!isWinningCard && effect.type === 'reverse') {
+                this.isClockwise = !this.isClockwise;
+                this.directionArrow.toggle();
+            }
+            if (this._isStateDesynced(result)) {
+                ErrorPopup.show(this, 'Cards out of sync! Refreshing...');
+                this._resyncFromServer(result);
+            } else {
+                this._reversePlayedCard(card, player);
+                ErrorPopup.show(this, "Nice try! That card doesn't match.");
+                this.enablePlayerTurn();
+            }
+            return;
+        }
+
+        // Winning card — go straight to game over, skip all post-play effects
+        if (isWinningCard) {
+            this._handleGameOver(result.winner ?? 0);
+            return;
+        }
+
+        // Sync state from response
+        this.topCard = result.topCard;
+        this.activeColor = result.activeColor;
+
+        // Process bot turns with effects
+        const botTurns = result.botTurns;
+
+        const continueWithBotTurns = () => {
+            this.scheduleTimer(400, () => {
+                this.moveExecutor.executeMoves(botTurns, () => {
+                    this.syncState();
+                    this._checkBotWin(result);
+                    this.enablePlayerTurn();
+                });
+            });
+        };
+
+        if (result.reshuffled) {
+            this._animateReshuffle(result.deckCountAfterReshuffle).then(continueWithBotTurns);
+        } else {
+            continueWithBotTurns();
         }
     }
 
