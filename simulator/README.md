@@ -1,11 +1,11 @@
-# Ada UNO — Simulator
+# DDA UNO — Simulator
 
 Offline training and simulation package that wraps the `engine/` core to train DQN agents and test adaptive difficulty convergence.
 
 ## Architecture
 
 ```
-ada-uno/
+dda-uno/
 ├── engine/        ← Pure core package (game logic, agents, bots)
 ├── simulator/     ← This folder: training + simulation
 ├── api/           ← FastAPI service (live play)
@@ -64,10 +64,10 @@ pip install -r engine/requirements.txt
 
 ## Usage
 
-**All commands must be run from the project root (`ada-uno/`)** so Python can find both `simulator` and `engine`:
+**All commands must be run from the project root (`dda-uno/`)** so Python can find both `simulator` and `engine`:
 
 ```bash
-cd ada-uno    # project root — NOT inside simulator/
+cd dda-uno    # project root — NOT inside simulator/
 ```
 
 ### Step 1: Smoke Test (Before Overnight Training)

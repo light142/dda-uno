@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ada-uno-api
+    name: dda-uno-api
     runtime: docker
     plan: free
     region: singapore

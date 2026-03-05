@@ -211,7 +211,7 @@ python -m simulator.training.train_selfish --test
 
 Test any combination of agents across all 4 seats using the simulator CLI.
 
-**All commands run from project root (`ada-uno/`):**
+**All commands run from project root (`dda-uno/`):**
 
 ```bash
 # Specific combo: 3 selfish bots vs rule-v1
