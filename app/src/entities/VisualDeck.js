@@ -285,6 +285,221 @@ export class VisualDeck extends Phaser.GameObjects.Container {
     }
 
     /**
+     * Bridge shuffle — split, tilt, riffle into arch, hold, waterfall collapse,
+     * rotation flourish, settle. Loops until stopShuffleWait() is called.
+     */
+    shuffleWait(onStopped) {
+        this._shuffleWaitActive = true;
+        this._shuffleWaitCallback = onStopped || null;
+
+        const originals = this.stackLayers.map(s => ({
+            x: s.x, y: s.y, rotation: s.rotation,
+            scaleX: s.scaleX, scaleY: s.scaleY,
+        }));
+
+        const total = this.stackLayers.length;
+        const half = Math.floor(total / 2);
+        const leftHalf = this.stackLayers.slice(0, half);
+        const rightHalf = this.stackLayers.slice(half);
+
+        const SPLIT_X = SHUFFLE.SPLIT_DISTANCE * 0.8;
+        const TILT_ANGLE = 0.12;              // ~7 degrees
+        const BRIDGE_PEAK = 30;               // peak height of the arch
+        const RIFFLE_STAGGER = 25;            // ms between each card in riffle
+        const BRIDGE_HOLD = 450;              // pause at the top of the bridge
+        const WATERFALL_STAGGER = 20;         // ms between each card falling
+
+        const doPass = () => {
+            if (!this._shuffleWaitActive) {
+                // Snap to rest and fire callback
+                let done = 0;
+                this.stackLayers.forEach((sprite, i) => {
+                    const orig = originals[i];
+                    this.scene.tweens.add({
+                        targets: sprite,
+                        x: orig.x, y: orig.y, rotation: orig.rotation,
+                        duration: 200,
+                        ease: 'Back.easeOut',
+                        onComplete: () => {
+                            done++;
+                            if (done >= total && this._shuffleWaitCallback) {
+                                this._shuffleWaitCallback();
+                                this._shuffleWaitCallback = null;
+                            }
+                        },
+                    });
+                });
+                return;
+            }
+
+            // ── Phase 1: Split halves apart ──
+            let splitDone = 0;
+            const onSplitDone = () => {
+                splitDone++;
+                if (splitDone >= total) startTilt();
+            };
+
+            leftHalf.forEach((sprite, i) => {
+                this.scene.tweens.add({
+                    targets: sprite,
+                    x: originals[i].x - SPLIT_X,
+                    duration: 250,
+                    ease: 'Power2',
+                    onComplete: onSplitDone,
+                });
+            });
+            rightHalf.forEach((sprite, i) => {
+                this.scene.tweens.add({
+                    targets: sprite,
+                    x: originals[half + i].x + SPLIT_X,
+                    duration: 250,
+                    ease: 'Power2',
+                    onComplete: onSplitDone,
+                });
+            });
+
+            // ── Phase 2: Tilt halves toward each other ──
+            const startTilt = () => {
+                let tiltDone = 0;
+                const onTiltDone = () => {
+                    tiltDone++;
+                    if (tiltDone >= total) startRiffle();
+                };
+
+                leftHalf.forEach(sprite => {
+                    this.scene.tweens.add({
+                        targets: sprite,
+                        rotation: TILT_ANGLE,
+                        y: sprite.y - 6,
+                        duration: 180,
+                        ease: 'Sine.easeOut',
+                        onComplete: onTiltDone,
+                    });
+                });
+                rightHalf.forEach(sprite => {
+                    this.scene.tweens.add({
+                        targets: sprite,
+                        rotation: -TILT_ANGLE,
+                        y: sprite.y - 6,
+                        duration: 180,
+                        ease: 'Sine.easeOut',
+                        onComplete: onTiltDone,
+                    });
+                });
+            };
+
+            // ── Phase 3: Riffle into bridge arch ──
+            const startRiffle = () => {
+                // Interleave order: L0, R0, L1, R1, ...
+                const interleaved = [];
+                for (let j = 0; j < half; j++) {
+                    interleaved.push({ sprite: leftHalf[j], idx: j });
+                    if (j < rightHalf.length) {
+                        interleaved.push({ sprite: rightHalf[j], idx: half + j });
+                    }
+                }
+                // Remaining right half cards
+                for (let j = half; j < rightHalf.length; j++) {
+                    interleaved.push({ sprite: rightHalf[j], idx: half + j });
+                }
+
+                const archCount = interleaved.length;
+                let riffleDone = 0;
+
+                interleaved.forEach((item, order) => {
+                    // Arch shape: parabola peaking at center
+                    const t = order / (archCount - 1);         // 0..1
+                    const archY = -BRIDGE_PEAK * 4 * t * (1 - t); // inverted parabola
+                    const archX = (t - 0.5) * 8;              // slight horizontal spread
+
+                    const delay = order * RIFFLE_STAGGER + Math.random() * 10;
+
+                    this.scene.tweens.add({
+                        targets: item.sprite,
+                        x: archX,
+                        y: archY - order * 0.5,  // slight vertical stacking
+                        rotation: 0,
+                        duration: 140,
+                        delay,
+                        ease: 'Quad.easeOut',
+                        onStart: () => this.bringToTop(item.sprite),
+                        onComplete: () => {
+                            riffleDone++;
+                            if (riffleDone >= archCount) {
+                                // Hold the bridge
+                                this.scene.time.delayedCall(BRIDGE_HOLD, startWaterfall);
+                            }
+                        },
+                    });
+                });
+            };
+
+            // ── Phase 4: Waterfall collapse ──
+            const startWaterfall = () => {
+                // Sort by current Y descending (top of arch first)
+                const sorted = [...this.stackLayers].sort((a, b) => a.y - b.y);
+                let fallDone = 0;
+
+                sorted.forEach((sprite, order) => {
+                    const stackIdx = this.stackLayers.indexOf(sprite);
+                    const orig = originals[stackIdx];
+
+                    this.scene.tweens.add({
+                        targets: sprite,
+                        x: orig.x,
+                        y: orig.y,
+                        rotation: orig.rotation,
+                        duration: 180,
+                        delay: order * WATERFALL_STAGGER,
+                        ease: 'Bounce.easeOut',
+                        onComplete: () => {
+                            fallDone++;
+                            if (fallDone >= total) startFlourish();
+                        },
+                    });
+                });
+            };
+
+            // ── Phase 5: Square-up bounce (matches main shuffle) ──
+            const startFlourish = () => {
+                // Restore rendering order
+                this.stackLayers.forEach(sprite => this.bringToTop(sprite));
+
+                let bounced = 0;
+                this.stackLayers.forEach((sprite, i) => {
+                    const orig = originals[i];
+                    this.scene.tweens.add({
+                        targets: sprite,
+                        scaleX: orig.scaleX * SHUFFLE.BOUNCE_SCALE,
+                        scaleY: orig.scaleY * SHUFFLE.BOUNCE_SCALE,
+                        y: orig.y - 6,
+                        duration: SHUFFLE.BOUNCE_DURATION,
+                        ease: 'Quad.easeOut',
+                        yoyo: true,
+                        onComplete: () => {
+                            bounced++;
+                            if (bounced >= total) {
+                                // Brief pause then loop
+                                this.scene.time.delayedCall(300, () => doPass());
+                            }
+                        },
+                    });
+                });
+            };
+        };
+
+        doPass();
+    }
+
+    /**
+     * Stop the waiting shuffle loop. Current pass will finish gracefully.
+     */
+    stopShuffleWait(onStopped) {
+        this._shuffleWaitActive = false;
+        if (onStopped) this._shuffleWaitCallback = onStopped;
+    }
+
+    /**
      * Reset the deck visual to full state
      * Called when a new deal starts
      */

@@ -185,7 +185,7 @@ export class ApiClient {
      * Raw fetch call with headers.
      * @private
      */
-    static REQUEST_TIMEOUT = 5_000; // 5 seconds
+    static REQUEST_TIMEOUT = 15_000; // 15 seconds
 
     static async _fetch(method, path, body = null) {
         const url = `${this.BASE_URL}${path}`;

@@ -1,5 +1,6 @@
 import { BOT_MODE_SELECTOR } from '../config/settings.js';
 import { ErrorPopup } from './ErrorPopup.js';
+import { LoadingSpinner } from './LoadingSpinner.js';
 
 const ADAPTIVE_OPTION = { key: 'adaptive', label: 'Adaptive', desc: 'auto-adjusts to your skill' };
 
@@ -89,6 +90,14 @@ export class BotModeSelector {
         const itemCfg = cfg.ITEM;
         let busy = false;
 
+        let spinnerHandle = null;
+        const showSpinner = () => {
+            spinnerHandle = LoadingSpinner.show(scene);
+        };
+        const hideSpinner = () => {
+            if (spinnerHandle) { spinnerHandle.hide(); spinnerHandle = null; }
+        };
+
         // ── Adaptive option (standalone, top section) ──
         const adaptiveY = itemCfg.START_Y;
         this._addItem(scene, container, ADAPTIVE_OPTION, adaptiveY, itemCfg,
@@ -97,10 +106,12 @@ export class BotModeSelector {
                 if (busy) return;
                 if (currentMode === 'adaptive') { this._close(scene); return; }
                 busy = true;
+                showSpinner();
                 try {
                     await adapter.setBotMode('adaptive');
+                    hideSpinner();
                     this._confirmAndDismiss(scene, () => onChanged && onChanged('adaptive'));
-                } catch (err) { busy = false; ErrorPopup.show(scene, ErrorPopup.friendlyMessage(err)); }
+                } catch (err) { busy = false; hideSpinner(); ErrorPopup.show(scene, ErrorPopup.friendlyMessage(err)); }
             });
 
         // ── Divider + section label ──
@@ -129,10 +140,12 @@ export class BotModeSelector {
                     if (busy) return;
                     if (option.key === currentMode) { this._close(scene); return; }
                     busy = true;
+                    showSpinner();
                     try {
                         await adapter.setBotMode(option.key);
+                        hideSpinner();
                         this._confirmAndDismiss(scene, () => onChanged && onChanged(option.key));
-                    } catch (err) { busy = false; ErrorPopup.show(scene, ErrorPopup.friendlyMessage(err)); }
+                    } catch (err) { busy = false; hideSpinner(); ErrorPopup.show(scene, ErrorPopup.friendlyMessage(err)); }
                 });
         });
 

@@ -21,6 +21,7 @@ import { ResumeToast } from '../ui/ResumeToast.js';
 import { GameOverOverlay } from '../ui/GameOverOverlay.js';
 import { TierBadge } from '../ui/TierBadge.js';
 import { BotModeSelector } from '../ui/BotModeSelector.js';
+import { LoadingSpinner } from '../ui/LoadingSpinner.js';
 
 export class GameScene extends Phaser.Scene {
     constructor() {
@@ -87,6 +88,9 @@ export class GameScene extends Phaser.Scene {
      * Falls back to normal tap-to-start if no active game or on error.
      */
     async _checkForActiveGame() {
+        // Show spinning cards while fetching profile + active game
+        const spinner = LoadingSpinner.show(this);
+
         // Fetch profile first so we always have the user's botMode
         if (this.gameAdapter instanceof GameApiAdapter) {
             try {
@@ -99,6 +103,7 @@ export class GameScene extends Phaser.Scene {
 
         try {
             const result = await this.gameAdapter.checkActiveGame();
+            spinner.hide();
 
             if (result.hasActiveGame && result.gameState) {
                 // Show badge alongside resume toast
@@ -113,7 +118,7 @@ export class GameScene extends Phaser.Scene {
                 return;
             }
         } catch (_) {
-            // If check fails, just proceed normally
+            spinner.hide();
         }
 
         this._showTapToStartWithBadge();
@@ -577,6 +582,7 @@ export class GameScene extends Phaser.Scene {
         ErrorPopup.forceClear(this);
         TierBadge.forceClear(this);
         BotModeSelector.forceClear(this);
+        LoadingSpinner.forceClear(this);
         this._currentGameMode = null;
         if (this._debugGameOverBtn) { this._debugGameOverBtn.destroy(); this._debugGameOverBtn = null; }
         this.time.removeAllEvents();
@@ -681,7 +687,7 @@ export class GameScene extends Phaser.Scene {
             this._skipTapToStart = false;
             this.startIntroSequence();
         } else {
-            this.showTapToStart();
+            this._showTapToStartWithBadge();
         }
     }
 
@@ -771,57 +777,84 @@ export class GameScene extends Phaser.Scene {
         this.scheduleTimer(3000, () => this.emoteSystem.playEmote(botIndices[0], 'greet'));
         this.scheduleTimer(7000, () => this.emoteSystem.playEmote(botIndices[1], 'gg'));
 
-        // Start a new game via the active backend
-        let gameData;
-        try {
-            gameData = await this.gameAdapter.startGame();
-        } catch (err) {
-            const msg = ErrorPopup.friendlyMessage(err);
-            ErrorPopup.show(this, msg);
-            this.scheduleTimer(3000, () => this.handleRestart());
-            return;
-        }
-
-        this.deckTotal = gameData.deckTotal;
-
-        // Show tier badge (API-backed games only)
-        if (this.gameAdapter instanceof GameApiAdapter && gameData.botTier) {
-            this._currentGameMode = gameData.botMode || 'adaptive';
-            TierBadge.show(this, gameData.botTier, this._currentGameMode, null,
-                () => this.openBotModeSelector());
-        }
-
-        this.topCard = gameData.starterCard;
-        this.activeColor = gameData.activeColor ?? (gameData.starterCard ? gameData.starterCard.suit : null);
-        this.isClockwise = gameData.isClockwise ?? true;
-        this.directionArrow.setDirection(this.isClockwise);
-
         this.dealer.syncWithVisualDeck();
         this.visualDeck.reset();
 
-        // Expand integer bot hands to face-down card arrays for CardDealer
-        const expandedHands = gameData.playerHands.map(hand =>
-            Array.isArray(hand)
-                ? hand
-                : Array.from({ length: hand }, () => ({ suit: null, value: 'back' }))
+        // Start API call and shuffle animation at the same time
+        let gameData = null;
+        let apiError = null;
+        let shuffleDone = false;
+
+        const apiPromise = this.gameAdapter.startGame().then(
+            result => { gameData = result; },
+            err => { apiError = err; },
         );
 
-        // Store initial bot turns for post-deal animation
-        this._pendingInitialBotTurns = gameData.initialBotTurns || [];
-        this._postBotFinalState = {
-            topCard: gameData.finalTopCard || gameData.starterCard,
-            activeColor: gameData.finalActiveColor ?? gameData.activeColor,
-            isClockwise: gameData.finalIsClockwise ?? gameData.isClockwise,
-        };
+        const doDeal = () => {
+            if (apiError) {
+                const msg = ErrorPopup.friendlyMessage(apiError);
+                ErrorPopup.show(this, msg);
+                this.scheduleTimer(3000, () => this.handleRestart());
+                return;
+            }
 
-        // Shuffle animation, then deal with pre-determined cards
-        this.visualDeck.shuffle(() => {
+            this.deckTotal = gameData.deckTotal;
+            this.visualDeck.visualRemaining = gameData.deckTotal;
+
+            if (this.gameAdapter instanceof GameApiAdapter && gameData.botTier) {
+                this._currentGameMode = gameData.botMode || 'adaptive';
+                TierBadge.show(this, gameData.botTier, this._currentGameMode, null,
+                    () => this.openBotModeSelector());
+            }
+
+            this.topCard = gameData.starterCard;
+            this.activeColor = gameData.activeColor ?? (gameData.starterCard ? gameData.starterCard.suit : null);
+            this.isClockwise = gameData.isClockwise ?? true;
+            this.directionArrow.setDirection(this.isClockwise);
+
+            const expandedHands = gameData.playerHands.map(hand =>
+                Array.isArray(hand)
+                    ? hand
+                    : Array.from({ length: hand }, () => ({ suit: null, value: 'back' }))
+            );
+
+            this._pendingInitialBotTurns = gameData.initialBotTurns || [];
+            this._postBotFinalState = {
+                topCard: gameData.finalTopCard || gameData.starterCard,
+                activeColor: gameData.finalActiveColor ?? gameData.activeColor,
+                isClockwise: gameData.finalIsClockwise ?? gameData.isClockwise,
+            };
+
             const players = this.playerManager.getAllPlayers();
-
             this.dealer.dealToMultiplePlayers(players, expandedHands, () => {
                 this.onDealComplete(gameData.starterCard);
             });
+        };
+
+        const tryDeal = () => {
+            if (!shuffleDone) return;
+            if (!gameData && !apiError) return;
+
+            // If idle shuffle is playing, stop it gracefully then deal
+            if (this.visualDeck._shuffleWaitActive) {
+                this.visualDeck.stopShuffleWait(() => doDeal());
+                return;
+            }
+            doDeal();
+        };
+
+        // When shuffle finishes: deal if API is ready, otherwise start idle shuffle
+        this.visualDeck.shuffle(() => {
+            shuffleDone = true;
+            if (gameData || apiError) {
+                doDeal();
+            } else {
+                this.visualDeck.shuffleWait();
+            }
         });
+
+        // When API finishes, try to deal (may still be in main shuffle or idle shuffle)
+        apiPromise.then(() => tryDeal());
     }
 
     onDealComplete(starterCardData) {
