@@ -58,6 +58,10 @@ htmlcov/
 engine/models/**/*.pt
 engine/models/**/*.pth
 
+# API: full models (use models_lite/ for deployment)
+api/models/**/*.pt
+api/models/**/*.pth
+
 # Simulator: keep final agent files, ignore training checkpoints
 simulator/models/**/checkpoint_*.pt
 simulator/models/**/*.pth
