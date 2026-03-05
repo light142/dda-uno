@@ -16,6 +16,7 @@ from auth.router import router as auth_router
 from game.router import router as game_router
 from game.bot_manager import BotManager
 from player.router import router as player_router
+from admin.router import router as admin_router
 
 settings = get_settings()
 
@@ -29,6 +30,11 @@ async def lifespan(app: FastAPI):
     await create_tables()
     # Force model loading at startup so first request isn't slow
     from game.service import _bot_manager  # noqa: F401
+    # Import existing simulation results from simulator/data/
+    from admin.simulation.service import import_existing_simulations
+    count = import_existing_simulations()
+    if count:
+        print(f"  Imported {count} existing simulation results")
     yield
 
 
@@ -55,6 +61,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(game_router)
 app.include_router(player_router)
+app.include_router(admin_router)
 
 
 # ── Health check ──────────────────────────────────────────────────────────

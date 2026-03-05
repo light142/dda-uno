@@ -7,3 +7,4 @@ bcrypt
 sqlalchemy[asyncio]
 aiosqlite
 numpy
+asyncpg

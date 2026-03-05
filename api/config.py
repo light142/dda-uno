@@ -22,10 +22,11 @@ class Settings(BaseSettings):
 
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/ada_uno.db"
-    MODEL_DIR: str = "./models"
+    MODEL_DIR: str = "./models_lite"
     CORS_ORIGINS: str = "*"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ADMIN_PASSWORD: str = "admin"
 
     # Data-driven target win rate bounds (from 10k-game simulations)
     # Min: pro vs hyper_adversarial ≈ 21% (even best player can't go lower)

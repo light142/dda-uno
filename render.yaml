@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ada-uno-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: MODEL_DIR
+        value: ./models_lite
