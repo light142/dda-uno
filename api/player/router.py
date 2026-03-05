@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import get_settings
 from database import get_db
 from dependencies import get_current_user
 from models import User, Game
@@ -124,6 +125,14 @@ class SetBotModeResponse(BaseModel):
     botMode: str
 
 
+class SetTargetWinRateRequest(BaseModel):
+    targetWinRate: float = Field(..., description="Desired win rate (server validates against config bounds)")
+
+
+class SetTargetWinRateResponse(BaseModel):
+    targetWinRate: float
+
+
 @router.put(
     "/me/bot-mode",
     response_model=SetBotModeResponse,
@@ -147,6 +156,32 @@ async def set_bot_mode(
     user.bot_mode = mode
     await db.commit()
     return SetBotModeResponse(botMode=mode)
+
+
+# ── PUT /api/users/me/target-win-rate ──────────────────────────────────
+
+
+@router.put(
+    "/me/target-win-rate",
+    response_model=SetTargetWinRateResponse,
+    summary="Set target win rate",
+    description="Set the player's desired win rate. Bounds enforced from simulation data (default 10%–80%).",
+)
+async def set_target_win_rate(
+    body: SetTargetWinRateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    settings = get_settings()
+    lo, hi = settings.MIN_TARGET_WIN_RATE, settings.MAX_TARGET_WIN_RATE
+    if not (lo <= body.targetWinRate <= hi):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"targetWinRate must be between {lo} and {hi} (data-driven bounds).",
+        )
+    user.target_win_rate = body.targetWinRate
+    await db.commit()
+    return SetTargetWinRateResponse(targetWinRate=user.target_win_rate)
 
 
 # ── DELETE /api/users/me/history ─────────────────────────────────────────

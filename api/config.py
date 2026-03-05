@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # Data-driven target win rate bounds (from 10k-game simulations)
+    # Min: pro vs hyper_adversarial ≈ 21% (even best player can't go lower)
+    # Max: noob vs hyper_altruistic ≈ 60% (even weakest player can't go higher)
+    MIN_TARGET_WIN_RATE: float = 0.20
+    MAX_TARGET_WIN_RATE: float = 0.60
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
