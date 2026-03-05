@@ -2035,32 +2035,9 @@ export class GameScene extends Phaser.Scene {
 
         this.disablePlayerTurn();
 
-        let result;
-        try {
-            result = await this.gameAdapter.playerPass();
-        } catch (err) {
-            if (err.status === 400 || err.status === 404) {
-                this._recoverStaleGame();
-                return;
-            }
-            ErrorPopup.show(this, ErrorPopup.friendlyMessage(err));
-            this.enablePlayerTurn();
-            return;
-        }
-
         const localPlayer = this.playerManager.getLocalPlayer();
-        const botTurns = result.botTurns;
 
-        if (!result.drawnCard) {
-            // Deck empty — execute bot turns and continue
-            this.moveExecutor.executeMoves(botTurns, () => {
-                this.syncState();
-                this._checkBotWin(result);
-                this.enablePlayerTurn();
-            });
-            return;
-        }
-
+        // ── Optimistic draw: animate card immediately, flip when API returns ──
         this.dealer.syncWithVisualDeck();
 
         const newCount = localPlayer.cards.length + 1;
@@ -2085,16 +2062,91 @@ export class GameScene extends Phaser.Scene {
             });
         }
 
-        this.dealer.dealToPlayer(localPlayer, result.drawnCard, targetPos, (card) => {
-            card.flip(() => {
+        // Spawn a face-down placeholder card and slide it to hand
+        // Use a dummy suit/value — will be updated when API returns
+        const placeholder = { suit: 'red', value: '0' };
+        let drawnCard = null;
+        let cardArrived = false;
+
+        this.dealer.dealToPlayer(localPlayer, placeholder, targetPos, (card) => {
+            drawnCard = card;
+            cardArrived = true;
+            tryReveal();
+        }, { depth: cardDepth, slideDuration: ANIMATION.PENALTY_SLIDE_DURATION });
+
+        // Fire API call in parallel
+        let result = null;
+        let apiError = null;
+        let apiDone = false;
+
+        try {
+            result = await this.gameAdapter.playerPass();
+        } catch (err) {
+            apiError = err;
+        }
+        apiDone = true;
+
+        // If card hasn't arrived yet, tryReveal will be called when it does
+        tryReveal();
+
+        const self = this;
+        function tryReveal() {
+            if (!cardArrived || !apiDone) return;
+
+            // ── API failed: return card to deck ──
+            if (apiError) {
+                localPlayer.removeCard(drawnCard);
+                self.tweens.killTweensOf(drawnCard);
+                const deckPos = self.visualDeck.getTopCardPosition();
+                self.tweens.add({
+                    targets: drawnCard,
+                    x: deckPos.x,
+                    y: deckPos.y,
+                    alpha: 0,
+                    duration: 250,
+                    ease: 'Sine.easeIn',
+                    onComplete: () => {
+                        drawnCard.destroy();
+                        self.refanCards(localPlayer);
+                        if (apiError.status === 400 || apiError.status === 404) {
+                            self._recoverStaleGame();
+                        } else {
+                            ErrorPopup.show(self, ErrorPopup.friendlyMessage(apiError));
+                            self.enablePlayerTurn();
+                        }
+                    },
+                });
+                return;
+            }
+
+            const botTurns = result.botTurns;
+
+            // ── Deck was empty — no card actually drawn ──
+            if (!result.drawnCard) {
+                localPlayer.removeCard(drawnCard);
+                self.tweens.killTweensOf(drawnCard);
+                drawnCard.destroy();
+                self.refanCards(localPlayer);
+                self.moveExecutor.executeMoves(botTurns, () => {
+                    self.syncState();
+                    self._checkBotWin(result);
+                    self.enablePlayerTurn();
+                });
+                return;
+            }
+
+            // ── Success: update card identity and flip to reveal ──
+            drawnCard.updateCardData(result.drawnCard.suit, result.drawnCard.value);
+
+            drawnCard.flip(() => {
                 if (result.autoPlayed) {
                     // Auto-play: drawn card is playable — fly it to center
-                    this.scheduleTimer(300, () => {
-                        localPlayer.removeCard(card);
+                    self.scheduleTimer(300, () => {
+                        localPlayer.removeCard(drawnCard);
                         const isWinningCard = localPlayer.cards.length === 0;
 
                         if (!isWinningCard) {
-                            this.triggerPlayEmotes(0, result.drawnCard, localPlayer.cards.length);
+                            self.triggerPlayEmotes(0, result.drawnCard, localPlayer.cards.length);
                         }
 
                         const zone = DRAG_DROP.PLAY_ZONE;
@@ -2103,72 +2155,72 @@ export class GameScene extends Phaser.Scene {
                         const y = zone.Y + Phaser.Math.FloatBetween(-scatter.OFFSET, scatter.OFFSET);
                         const rot = Phaser.Math.FloatBetween(-scatter.ROTATION, scatter.ROTATION);
 
-                        card.playToCenter(x, y, rot, () => {
-                            this.discardPile.push(card);
+                        drawnCard.playToCenter(x, y, rot, () => {
+                            self.discardPile.push(drawnCard);
                             if (isWinningCard) {
-                                this._fxWinningCard(card);
+                                self._fxWinningCard(drawnCard);
                             } else {
-                                this.playPowerCardEffect(card, result.drawnCard.value);
+                                self.playPowerCardEffect(drawnCard, result.drawnCard.value);
 
                                 if (result.chosenColor) {
-                                    this.scheduleTimer(COLOR_REPLACE.BOT_DELAY, () => {
-                                        this._animateColorReplacement(card, result.drawnCard.value, result.chosenColor);
+                                    self.scheduleTimer(COLOR_REPLACE.BOT_DELAY, () => {
+                                        self._animateColorReplacement(drawnCard, result.drawnCard.value, result.chosenColor);
                                     });
                                 }
                             }
                         });
 
-                        this.refanCards(localPlayer);
-                        this.topCard = result.topCard;
-                        this.activeColor = result.activeColor;
+                        self.refanCards(localPlayer);
+                        self.topCard = result.topCard;
+                        self.activeColor = result.activeColor;
 
                         // Winning card — go straight to game over
                         if (isWinningCard) {
-                            this._handleGameOver(result.winner ?? 0);
+                            self._handleGameOver(result.winner ?? 0);
                             return;
                         }
 
                         const proceedAfterAutoPlay = () => {
                             if (localPlayer.cards.length === 0) {
-                                this._handleGameOver(result.winner ?? 0);
+                                self._handleGameOver(result.winner ?? 0);
                                 return;
                             }
-                            this.scheduleTimer(400, () => {
-                                this.moveExecutor.executeMoves(botTurns, () => {
-                                    this.syncState();
-                                    this._checkBotWin(result);
-                                    this.enablePlayerTurn();
+                            self.scheduleTimer(400, () => {
+                                self.moveExecutor.executeMoves(botTurns, () => {
+                                    self.syncState();
+                                    self._checkBotWin(result);
+                                    self.enablePlayerTurn();
                                 });
                             });
                         };
 
                         const effect = GameLogic.getCardEffect(result.drawnCard);
                         if (effect.type === 'reverse') {
-                            this.isClockwise = !this.isClockwise;
-                            this.directionArrow.toggle(() => proceedAfterAutoPlay());
+                            self.isClockwise = !self.isClockwise;
+                            self.directionArrow.toggle(() => proceedAfterAutoPlay());
                         } else {
                             proceedAfterAutoPlay();
                         }
                     });
                 } else {
                     // Not playable — keep in hand
-                    card.makeInteractive();
-                    this.refanCards(localPlayer);
+                    drawnCard.makeInteractive();
+                    self.refanCards(localPlayer);
 
                     const proceedToBotTurns = () => {
-                        this.scheduleTimer(300, () => {
-                            this.moveExecutor.executeMoves(botTurns, () => {
-                                this.syncState();
-                                this._checkBotWin(result);
-                                this.enablePlayerTurn();
+                        self.scheduleTimer(300, () => {
+                            self.moveExecutor.executeMoves(botTurns, () => {
+                                self.syncState();
+                                self._checkBotWin(result);
+                                self.enablePlayerTurn();
                             });
                         });
                     };
 
                     // Reshuffle animation plays after the draw that emptied the deck
                     if (result.reshuffled) {
-                        this.scheduleTimer(200, () => {
-                            this._animateReshuffle(result.deckCountAfterReshuffle)
+                        self.scheduleTimer(200, () => {
+                            self._animateReshuffle(result.deckCountAfterReshuffle)
                                 .then(proceedToBotTurns);
                         });
                     } else {
@@ -2176,7 +2228,7 @@ export class GameScene extends Phaser.Scene {
                     }
                 }
             });
-        }, { depth: cardDepth, slideDuration: ANIMATION.PENALTY_SLIDE_DURATION });
+        }
     }
 
 
