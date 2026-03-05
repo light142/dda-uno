@@ -3,6 +3,7 @@ services:
     name: ada-uno-api
     runtime: docker
     plan: free
+    region: singapore
     dockerfilePath: ./Dockerfile
     envVars:
       - key: SECRET_KEY
