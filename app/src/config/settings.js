@@ -1,5 +1,5 @@
 // API base URL — set to your backend in production
-export const API_BASE_URL = 'http://192.168.4.35:8000';
+export const API_BASE_URL = 'https://ada-uno-api.onrender.com';
 
 export const SEAT_POSITIONS = [
     { position: 'bottom', x: 250, y: 600 },
