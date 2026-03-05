@@ -70,9 +70,15 @@ export class MoveExecutor {
                 case 'play':
                     this._executePlayMove(move, null, advance, justDrawn);
                     break;
-                case 'draw':
-                    this._executeDrawMove(move, advance);
+                case 'draw': {
+                    // Check if next move is auto-play by same player
+                    const nextMove = index + 1 < moveset.length ? moveset[index + 1] : null;
+                    const willAutoPlay = nextMove
+                        && nextMove.action === 'play'
+                        && nextMove.playerIndex === move.playerIndex;
+                    this._executeDrawMove(move, advance, willAutoPlay);
                     break;
+                }
                 default:
                     advance();
             }
@@ -197,7 +203,7 @@ export class MoveExecutor {
      * Handles both local mode (drawnCards is Card[]) and API mode (drawnCards is int).
      * @private
      */
-    _executeDrawMove(move, onComplete) {
+    _executeDrawMove(move, onComplete, willAutoPlay = false) {
         const player = this.scene.playerManager.getPlayer(move.playerIndex);
         const isCount = typeof move.drawnCards === 'number';
         const count = isCount ? move.drawnCards : (move.drawnCards?.length || 0);
@@ -212,19 +218,25 @@ export class MoveExecutor {
             ? Array.from({ length: count }, () => ({ suit: null, value: 'back' }))
             : move.drawnCards;
 
-        this._dealSpecificCards(player, cardDataArray, onComplete);
+        this._dealSpecificCards(player, cardDataArray, onComplete, willAutoPlay);
     }
 
     /**
      * Deal specific pre-determined cards to a player with animation.
      * @private
      */
-    _dealSpecificCards(player, cardDataArray, onComplete) {
+    _dealSpecificCards(player, cardDataArray, onComplete, willAutoPlay = false) {
         let dealt = 0;
         const total = cardDataArray.length;
 
         const dealNext = () => {
             if (dealt >= total) {
+                // Skip settling delays for bot auto-play — card will be played immediately
+                if (willAutoPlay && !player.isLocal) {
+                    onComplete();
+                    return;
+                }
+
                 // After all dealt, refan
                 this.scene.scheduleTimer(200, () => {
                     if (player.isLocal) {
